@@ -247,7 +247,7 @@ def waveforms(templates, unit_ids, units: pd.DataFrame, fs: float,
 
     cols = ["firing_rate", "snr", "isi_violations_ratio",
             "num_spikes", "x_um", "y_um", "peak_channel",
-            "peak_to_valley", "half_width"]
+            "peak_to_trough_duration", "trough_half_width"]
     info = units.set_index("unit_id")[
         [c for c in cols if c in units.columns]
     ].to_dict("index")
@@ -269,8 +269,8 @@ def waveforms(templates, unit_ids, units: pd.DataFrame, fs: float,
             f"{u.get('firing_rate', float('nan')):.2f} Hz\n"
             f"{int(u.get('num_spikes', 0))} spikes\n"
             f"snr {u.get('snr', float('nan')):.1f}\n"
-            f"p2v {u.get('peak_to_valley', float('nan'))*1000:.2f} ms\n"
-            f"hw {u.get('half_width', float('nan'))*1000:.2f} ms\n"
+            f"p2t {u.get('peak_to_trough_duration', float('nan'))*1000:.2f} ms\n"
+            f"hw {u.get('trough_half_width', float('nan'))*1000:.2f} ms\n"
             f"isi {u.get('isi_violations_ratio', float('nan')):.2f}\n"
             f"({u.get('x_um', float('nan')):.0f}, {u.get('y_um', float('nan')):.0f}) µm",
             transform=a.transAxes, ha="right", va="bottom",

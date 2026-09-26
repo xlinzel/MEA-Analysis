@@ -20,7 +20,11 @@ if __name__ == "__main__":
     _configure_logging()
 
     project = Project(Path("tests/project"))
-    params_dict = (Params(sorter="herdingspikes"), Params(sorter="spykingcircus2"))
+    params_dict = (
+        Params(sorter="herdingspikes"),
+        # SC2 keeps its whitening but must not re-filter/re-reference our recording
+        Params(sorter="spykingcircus2", sorter_params={"apply_preprocessing": False}),
+    )
 
     configure_runtime()
 

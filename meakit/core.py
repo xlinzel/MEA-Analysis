@@ -54,12 +54,12 @@ ProgressFn = Callable[[str, float], None]
 # default analyzer extensions
 DEFAULT_EXTENSIONS = {
     "random_spikes": {},
-    "waveforms": {},
-    "templates": {},
+    "waveforms": {"ms_before": 1.5, "ms_after": 2.5},
+    "templates": {"ms_before": 1.5, "ms_after": 2.5},
     "noise_levels": {},
-    "spike_amplitudes": {},
+    "spike_amplitudes": {"peak_sign": "both"},
     "spike_locations": {},
-    "unit_locations": {"method": "center_of_mass"},
+    "unit_locations": {"method": "monopolar_triangulation"},
     "correlograms": {},
     "template_similarity": {"method": "cosine", "max_lag_ms": 1.0},
     "quality_metrics": {},
@@ -76,6 +76,8 @@ class Params:
     merge_thresh: float = 0.25
     min_snr: float = 3.0
     max_isi_viol: float = 0.5
+    sparsity_radius_um: float = 60.0
+    exclude_channels: tuple = ()
     sorter: str = "herdingspikes"
     sorter_params: dict = field(default_factory=dict)
     extensions: dict = field(default_factory=lambda: dict(DEFAULT_EXTENSIONS))
@@ -186,8 +188,15 @@ def preprocess(data: Data, params: Params, project: Project, save: bool = False,
             freq_max=params.freq_max, 
             dtype="float32"
         )
+
+        # drop noisy channels before they enter the median reference
+        bad, _labels = si.detect_bad_channels(rec_filt, method="mad")
+        drop = sorted(set(bad) | set(params.exclude_channels))
+        logger.info("%s: dropping %d channels %s", data.name, len(drop), drop)
+        rec_filt = rec_filt.remove_channels(drop)
+
         rec_ref = si.common_reference(
-            rec_filt, 
+            rec_filt,
             reference="global", 
             operator=params.common_reference
         )
@@ -217,7 +226,8 @@ def preprocess(data: Data, params: Params, project: Project, save: bool = False,
 
     logger.info("Preprocessing complete: %s", data.name)
 
-    return replace(data, recording=rec_ref)
+    # channels may have been dropped, so take geometry from the preprocessed recording
+    return replace(data, recording=rec_ref, locations=rec_ref.get_channel_locations())
 
 def detect(data: Data, params: Params, project: Project, save: bool = False, force: bool = True) -> Data:
 
@@ -309,18 +319,13 @@ def analyze(data: Data, params: Params,  project: Project, force: bool = True) -
     def _build_analyzer(data: Data, save_path: Path) -> si.SortingAnalyzer:
         logger.info("Creating sorting analyzer at %s", save_path)
 
+        # fixed radius: SNR masks shrink to one channel for weak units, which
+        # collapses unit localization onto the electrode
         sp = si.estimate_sparsity(
             data.sorting, data.recording,
-            method="snr", threshold=2,
-            noise_levels=si.get_noise_levels(
-                data.recording, method="mad", return_in_uV=True
-            ),
+            method="radius", radius_um=params.sparsity_radius_um,
+            peak_sign="both",
         )
-        best = si.estimate_sparsity(
-            data.sorting, data.recording,
-            method="best_channels", num_channels=1,
-        )
-        sp.mask |= best.mask
 
         return si.create_sorting_analyzer(
             sorting=data.sorting,

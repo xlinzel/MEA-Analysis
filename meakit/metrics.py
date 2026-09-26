@@ -51,7 +51,7 @@ def unit_stats(data: Data) -> pd.DataFrame:
         df["x_um"] = loc[:, 0]
         df["y_um"] = loc[:, 1]
 
-    ext = si.get_template_extremum_channel(an)
+    ext = si.get_template_extremum_channel(an, peak_sign="both")
     df["peak_channel"] = df["unit_id"].map(ext)
 
     dur = data.recording.get_total_duration()
