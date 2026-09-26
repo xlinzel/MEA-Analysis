@@ -44,6 +44,7 @@ _configure_maxwell_plugin()
 import numpy as np
 import pandas as pd
 import spikeinterface.full as si
+from spikeinterface.curation.curation_tools import resolve_merging_graph
 from spikeinterface.sortingcomponents.peak_detection import detect_peaks
 
 # logger
@@ -84,6 +85,7 @@ class Params:
     sparsity_radius_um: float = 60.0
     exclude_channels: tuple = ()
     merge_min_spikes: int = 30
+    duplicate_fraction: float = 0.5   # shared spikes (±0.4 ms) that mark a duplicate
     # curation
     min_snr: float = 5.0
     max_amp_cutoff: float = 0.1
@@ -390,7 +392,7 @@ def compute(data: Data, params: Params, force: bool = False) -> Data:
 
 
 def merge(data: Data, params: Params, project: Project, force: bool = False) -> Data:
-    """Remove duplicate units, realign spike trains, then auto-merge oversplit units."""
+    """Realign spike trains, merge duplicate units, then auto-merge oversplit units."""
 
     base = result_dir(project, data.name) / f"analyzer_{params.sorter}"
 
@@ -400,18 +402,21 @@ def merge(data: Data, params: Params, project: Project, force: bool = False) -> 
         # so the sign must be flipped or misaligned units move further apart (SI 0.104)
         shifts = {u: -s for u, s in
                   si.get_template_extremum_channel_peak_shift(an, peak_sign="both").items()}
-        sorting, pairs = si.remove_redundant_units(
-            an, align=True, unit_peak_shifts=shifts, delta_time=0.4,
-            duplicate_threshold=0.8, remove_strategy="minimum_shift",
-            peak_sign="both", extra_outputs=True,
-        )
-        logger.info("%s: %d redundant pairs %s", data.name, len(pairs), pairs)
-        sorting = si.align_sorting(sorting, {u: shifts[u] for u in sorting.unit_ids})
-        sorting = si.remove_excess_spikes(sorting, data.recording)
+        sorting = si.remove_excess_spikes(si.align_sorting(an.sorting, shifts), data.recording)
 
         # templates and metrics must be rebuilt on the aligned spike trains
         an = _build_analyzer(sorting, data.recording, params, Path(f"{base}_dedup"))
         an.compute(params.extensions)
+
+        # duplicates: one cell emitted under two templates. Merge rather than drop so
+        # spikes only one copy caught are kept; the censor removes the double counts
+        pairs = si.find_redundant_units(sorting, delta_time=0.4,
+                                        duplicate_threshold=params.duplicate_fraction)
+        groups = resolve_merging_graph(sorting, pairs)
+        logger.info("%s: duplicate groups %s", data.name, groups)
+        if groups:
+            an = an.merge_units(groups, merging_mode="hard", censor_ms=0.4,
+                                new_id_strategy="take_first")
 
         # correlogram presets need hundreds of spikes; the cross-contamination test
         # (same template + location, no refractory conflict) works at 50-150
