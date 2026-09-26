@@ -42,6 +42,7 @@ _configure_maxwell_plugin()
 
 # third-party imports
 import numpy as np
+import pandas as pd
 import spikeinterface.full as si
 from spikeinterface.sortingcomponents.peak_detection import detect_peaks
 
@@ -61,9 +62,16 @@ DEFAULT_EXTENSIONS = {
     "spike_locations": {},
     "unit_locations": {"method": "monopolar_triangulation"},
     "correlograms": {},
-    "template_similarity": {"method": "cosine", "max_lag_ms": 1.0},
+    "template_similarity": {"method": "l1"},   # the metric auto_merge_units uses
     "quality_metrics": {},
     "template_metrics": {},
+}
+
+# sorter settings for an already filtered + referenced 2D HD-MEA recording
+SORTER_DEFAULTS = {
+    "herdingspikes": {"common_reference": "none"},
+    "spykingcircus2": {"apply_preprocessing": False},   # keeps its whitening
+    "kilosort4": {"do_CAR": False, "do_correction": False},  # no 1D probe drift in a slice
 }
 
 # dataclasses
@@ -73,11 +81,17 @@ class Params:
     freq_max: float = 6000.0
     common_reference: str = "median"
     detect_mad: float = 5.0
-    merge_thresh: float = 0.25
-    min_snr: float = 3.0
-    max_isi_viol: float = 0.5
     sparsity_radius_um: float = 60.0
     exclude_channels: tuple = ()
+    merge_min_spikes: int = 30
+    # curation
+    min_snr: float = 5.0
+    max_amp_cutoff: float = 0.1
+    min_presence: float = 0.9
+    min_spikes: int = 50
+    fast_rate_hz: float = 2.0
+    max_rp_contamination: float = 0.2
+    max_isi_count_slow: int = 1
     sorter: str = "herdingspikes"
     sorter_params: dict = field(default_factory=dict)
     extensions: dict = field(default_factory=lambda: dict(DEFAULT_EXTENSIONS))
@@ -202,7 +216,7 @@ def preprocess(data: Data, params: Params, project: Project, save: bool = False,
         )
 
         if save:
-            rec_ref.save_to_folder(
+            rec_ref = rec_ref.save_to_folder(
                 folder = save_path, 
                 overwrite=True, 
                 format='binary'
@@ -281,7 +295,14 @@ def sort(data: Data, params: Params, project: Project, force: bool = True) -> Da
     save_path = result_dir(project, data.name) / f"sorted_{params.sorter}"
 
     def sb():
-        merged = si.get_default_sorter_params(params.sorter) | params.sorter_params
+        extra = SORTER_DEFAULTS.get(params.sorter, {})
+        if params.sorter == "kilosort4":
+            # template grid at the electrode pitch, x centres every ~300 µm (2D array)
+            x_span = np.ptp(data.recording.get_channel_locations()[:, 0])
+            extra = extra | {"dmin": data.pitch_um, "dminx": data.pitch_um,
+                             "x_centers": max(1, round(x_span / 300))}
+        merged = si.get_default_sorter_params(params.sorter) | extra | params.sorter_params
+        logger.info("Sorter params: %s", merged)
         return si.run_sorter(
             sorter_name=params.sorter,
             recording=data.recording,
@@ -316,30 +337,8 @@ def analyze(data: Data, params: Params,  project: Project, force: bool = True) -
 
     save_path = result_dir(project, data.name) / f"analyzer_{params.sorter}"
 
-    def _build_analyzer(data: Data, save_path: Path) -> si.SortingAnalyzer:
-        logger.info("Creating sorting analyzer at %s", save_path)
-
-        # fixed radius: SNR masks shrink to one channel for weak units, which
-        # collapses unit localization onto the electrode
-        sp = si.estimate_sparsity(
-            data.sorting, data.recording,
-            method="radius", radius_um=params.sparsity_radius_um,
-            peak_sign="both",
-        )
-
-        return si.create_sorting_analyzer(
-            sorting=data.sorting,
-            recording=data.recording,
-            format='binary_folder',
-            folder=save_path,
-            overwrite=True,
-            sparsity=sp
-        )
-
     if force or not save_path.is_dir():
-        logger.info("Creating sorting analyzer at %s", save_path)
-
-        analyzer = _build_analyzer(data, save_path)
+        analyzer = _build_analyzer(data.sorting, data.recording, params, save_path)
         
     else:
         analyzer = None
@@ -367,7 +366,7 @@ def analyze(data: Data, params: Params,  project: Project, force: bool = True) -
             logger.exception("Failed to load cached analyzing data from %s", save_path)
 
         if analyzer is None:
-            analyzer = _build_analyzer(data, save_path)
+            analyzer = _build_analyzer(data.sorting, data.recording, params, save_path)
 
     logger.info("Analysis complete: %s", data.name)
 
@@ -391,82 +390,40 @@ def compute(data: Data, params: Params, force: bool = False) -> Data:
 
 
 def merge(data: Data, params: Params, project: Project, force: bool = False) -> Data:
+    """Remove duplicate units, realign spike trains, then auto-merge oversplit units."""
 
-    logger.info("Merging units for %s (thresh=%.2f)", data.name, params.merge_thresh)
-
-    save_path = result_dir(project, data.name) / f"analyzer_{params.sorter}_merged"
+    base = result_dir(project, data.name) / f"analyzer_{params.sorter}"
 
     def mb():
-        sim = data.analyzer.get_extension("template_similarity").get_data()
-        uids = list(data.sorting.unit_ids)
-        thresh = 1.0 - params.merge_thresh
-        fs = data.recording.get_sampling_frequency()
-        dur = data.recording.get_total_duration()
+        an = data.analyzer
+        # peak_shift returns (peak - nbefore) but align_sorting subtracts its shift,
+        # so the sign must be flipped or misaligned units move further apart (SI 0.104)
+        shifts = {u: -s for u, s in
+                  si.get_template_extremum_channel_peak_shift(an, peak_sign="both").items()}
+        sorting, pairs = si.remove_redundant_units(
+            an, align=True, unit_peak_shifts=shifts, delta_time=0.4,
+            duplicate_threshold=0.8, remove_strategy="minimum_shift",
+            peak_sign="both", extra_outputs=True,
+        )
+        logger.info("%s: %d redundant pairs %s", data.name, len(pairs), pairs)
+        sorting = si.align_sorting(sorting, {u: shifts[u] for u in sorting.unit_ids})
+        sorting = si.remove_excess_spikes(sorting, data.recording)
 
-        def isi_ratio(times, refrac_ms=1.5):
-            """SI-style violation ratio for a merged spike train."""
-            n = len(times)
-            if n < 2:
-                return 0.0
-            t = np.sort(times)
-            viol = np.count_nonzero(np.diff(t) < refrac_ms / 1000)
-            rate = n / dur
-            expected = 2 * (refrac_ms / 1000) * rate * n
-            return viol / expected if expected > 0 else 0.0
+        # templates and metrics must be rebuilt on the aligned spike trains
+        an = _build_analyzer(sorting, data.recording, params, Path(f"{base}_dedup"))
+        an.compute(params.extensions)
 
-        trains = {u: data.sorting.get_unit_spike_train(u, return_times=True)
-                  for u in uids}
+        # correlogram presets need hundreds of spikes; the cross-contamination test
+        # (same template + location, no refractory conflict) works at 50-150
+        an, merges, _, _ = si.auto_merge_units(
+            an, presets=["x_contaminations"],
+            steps_params=[{"num_spikes": {"min_spikes": params.merge_min_spikes}}],
+            censor_ms=0.3, merging_mode="hard", extra_outputs=True,
+        )
+        logger.info("%s: auto-merges %s", data.name, merges)
+        return an
 
-        # candidate pairs, most similar first
-        pairs = [(sim[i, j], uids[i], uids[j])
-                 for i in range(len(uids)) for j in range(i + 1, len(uids))
-                 if sim[i, j] >= thresh]
-        pairs.sort(reverse=True)
-
-        groups = {u: [u] for u in uids}        # representative -> members
-        owner = {u: u for u in uids}
-
-        for s, a, b in pairs:
-            ra, rb = owner[a], owner[b]
-            if ra == rb:
-                continue
-            combined = np.concatenate([trains[u] for u in groups[ra] + groups[rb]])
-            r = isi_ratio(combined)
-            if r <= params.max_isi_viol:
-                groups[ra] = groups[ra] + groups[rb]
-                for u in groups[rb]:
-                    owner[u] = ra
-                del groups[rb]
-                logger.info("  merged %s + %s (sim %.3f, isi %.2f)",
-                            a, b, s, r)
-            else:
-                logger.info("  rejected %s + %s (sim %.3f, isi %.2f)",
-                            a, b, s, r)
-
-        merge_groups = [g for g in groups.values() if len(g) > 1]
-        logger.info("%s: %d merge groups (sim >= %.2f, isi <= %g)",
-                    data.name, len(merge_groups), thresh, params.max_isi_viol)
-
-        if not merge_groups:
-            merged = data.analyzer
-        else:
-            merged = data.analyzer.merge_units(
-                merge_unit_groups=merge_groups, merging_mode="hard")
-
-        if save_path.exists():
-            shutil.rmtree(save_path)
-        merged.save_as(format="binary_folder", folder=save_path)
-        return si.load_sorting_analyzer(save_path)
-
-    if force or not save_path.is_dir():
-        analyzer = mb()
-    else:
-        try:
-            logger.info("Loading cached merge from %s", save_path)
-            analyzer = si.load_sorting_analyzer(save_path)
-        except Exception:
-            logger.exception("Failed to load cached merge from %s", save_path)
-            analyzer = mb()
+    analyzer = _cached_analyzer(Path(f"{base}_merged"), force, mb)
 
     logger.info("Merge complete: %d -> %d units",
                 data.analyzer.get_num_units(), analyzer.get_num_units())
@@ -475,49 +432,58 @@ def merge(data: Data, params: Params, project: Project, force: bool = False) -> 
 
 
 def curate(data: Data, params: Params, project: Project, force: bool = False) -> Data:
-    """Drop units failing quality thresholds."""
+    """Keep units passing every rule; log and save which rules rejected the rest."""
 
-    save_path = result_dir(project, data.name) / f"analyzer_{params.sorter}_curated"
+    base = result_dir(project, data.name) / f"analyzer_{params.sorter}"
 
     def cb():
-        qm = data.analyzer.get_extension("quality_metrics").get_data()
+        an = data.analyzer
+        units = an.get_extension("quality_metrics").get_data().join(unit_footprints(an))
+        fast = units["firing_rate"] >= params.fast_rate_hz
+        rules = pd.DataFrame({
+            "snr": units["snr"] >= params.min_snr,
+            "amplitude_cutoff": units["amplitude_cutoff"].isna()
+                                | (units["amplitude_cutoff"] <= params.max_amp_cutoff),
+            "presence_ratio": units["presence_ratio"] >= params.min_presence,
+            "num_spikes": units["num_spikes"] >= params.min_spikes,
+            # contamination is only measurable for fast units; slow units get a count
+            "refractory": np.where(fast, units["rp_contamination"] <= params.max_rp_contamination,
+                                   units["isi_violations_count"] <= params.max_isi_count_slow),
+            "footprint": ~units["single_electrode"],
+        })
+        units["keep"] = rules.all(axis=1)
+        units["rejected_by"] = rules.apply(lambda r: ",".join(r.index[~r.to_numpy(bool)]), axis=1)
 
-        logger.info(
-            "%s pre-curate:\n%s",
-            data.name,
-            qm[["snr", "isi_violations_ratio", "firing_rate", "num_spikes"]]
-              .sort_values("snr", ascending=False)
-              .to_string(),
-        )
+        logger.info("%s curation:\n%s", data.name, units[
+            ["snr", "firing_rate", "num_spikes", "footprint_n", "keep", "rejected_by"]
+        ].sort_values("snr", ascending=False).to_string())
+        units.to_csv(f"{base}_curation.csv", index_label="unit_id")
 
-        keep = qm[(qm["snr"] >= params.min_snr)
-                  & (qm["isi_violations_ratio"] <= params.max_isi_viol)].index.to_list()
+        return an.select_units(units.index[units["keep"]].to_list())
 
-        logger.info("%s: keeping %d of %d units (snr >= %g, isi <= %g)",
-                    data.name, len(keep), len(qm),
-                    params.min_snr, params.max_isi_viol)
-
-        curated = data.analyzer.select_units(keep)
-
-        if save_path.exists():
-            shutil.rmtree(save_path)
-        curated.save_as(format="binary_folder", folder=save_path)
-        return si.load_sorting_analyzer(save_path)
-
-    if force or not save_path.is_dir():
-        analyzer = cb()
-    else:
-        try:
-            logger.info("Loading cached curation from %s", save_path)
-            analyzer = si.load_sorting_analyzer(save_path)
-        except Exception:
-            logger.exception("Failed to load cached curation from %s", save_path)
-            analyzer = cb()
+    analyzer = _cached_analyzer(Path(f"{base}_curated"), force, cb)
 
     logger.info("Curation complete: %d -> %d units",
                 data.analyzer.get_num_units(), analyzer.get_num_units())
 
     return replace(data, analyzer=analyzer, sorting=analyzer.sorting)
+
+
+def unit_footprints(an: si.SortingAnalyzer, k: float = 3.0, neighbour_um: float = 35.0) -> pd.DataFrame:
+    """Channels above k x noise per unit; flags units seen on one electrode despite routed neighbours."""
+    tmpl = an.get_extension("templates").get_data()
+    noise = an.get_extension("noise_levels").get_data()
+    loc = an.get_channel_locations()
+
+    amp = np.abs(tmpl).max(axis=1)                          # (units, channels)
+    pk = amp.argmax(axis=1)
+    dist = np.linalg.norm(loc[pk][:, None] - loc[None], axis=2)
+    df = pd.DataFrame({
+        "footprint_n": (amp > k * noise).sum(axis=1),
+        "routed_neighbours": ((dist > 0) & (dist <= neighbour_um)).sum(axis=1),
+    }, index=an.unit_ids)
+    df["single_electrode"] = (df.footprint_n <= 1) & (df.routed_neighbours >= 4)
+    return df
 
 
 
@@ -577,6 +543,32 @@ def result_dir(project: Project, name: str) -> Path:
     return project.dir / "results" / name
 
 # private helpers
+
+def _build_analyzer(sorting, recording, params: Params, folder: Path) -> si.SortingAnalyzer:
+    logger.info("Creating sorting analyzer at %s", folder)
+
+    # fixed radius: SNR masks shrink to one channel for weak units, which
+    # collapses unit localization onto the electrode
+    sp = si.estimate_sparsity(sorting, recording, method="radius",
+                              radius_um=params.sparsity_radius_um, peak_sign="both")
+
+    return si.create_sorting_analyzer(sorting=sorting, recording=recording, format="binary_folder",
+                                      folder=folder, overwrite=True, sparsity=sp)
+
+
+def _cached_analyzer(path: Path, force: bool, build: Callable[[], si.SortingAnalyzer]) -> si.SortingAnalyzer:
+    if not force and path.is_dir():
+        try:
+            logger.info("Loading cached analyzer from %s", path)
+            return si.load_sorting_analyzer(path)
+        except Exception:
+            logger.exception("Failed to load cached analyzer from %s", path)
+
+    analyzer = build()
+    if path.exists():
+        shutil.rmtree(path)
+    return analyzer.save_as(format="binary_folder", folder=path)
+
 
 def _configure_logging(level=logging.INFO) -> None:
     logging.basicConfig(

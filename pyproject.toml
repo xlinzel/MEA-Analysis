@@ -1,0 +1,17 @@
+[project]
+name = "meakit"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    # pinned: 0.105 changes metric names and removes the old template-metrics module
+    "spikeinterface[full]>=0.104.9,<0.105",
+    "herdingspikes>=0.4.1",
+    "hdbscan",  # spykingcircus2 clustering
+    "elephant",
+    "pandas",
+    "pyarrow",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+kilosort = ["kilosort>=4.0.16"]

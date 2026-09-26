@@ -120,7 +120,6 @@ def unit_map(units: pd.DataFrame, locations: np.ndarray, channel_ids,
                 f"{params.sorter}  ·  "
                 f"{params.freq_min:.0f}–{params.freq_max:.0f} Hz  ·  "
                 f"{params.common_reference} reference  ·  "
-                f"merge ≤ {params.merge_thresh:g}  ·  "
                 f"black dots mark estimated unit centres",
                 ha="center", fontsize=7, color="#555555")
 
@@ -162,69 +161,78 @@ def traces(seg, fs, ax=None, offset_uv=120.0, lw=0.5, ms=False, n_unit=None):
 
 
 
-def population_rate(rates: pd.DataFrame, ax=None, source: str = "unit"):
-    """Mean rate ± SEM, with population total on the right axis."""
-    if ax is None:
-        _, ax = plt.subplots(figsize=(12, 4))
+def rates(t_mid, per_unit, bin_s, spike_times, duration, name="") -> Figure:
+    """Rate over time without letting one fast unit dominate.
 
-    if len(rates) == 0:
-        ax.set_xlabel("Time (s)", fontsize=10)
-        ax.set_ylabel(f"Mean firing rate per {source} (Hz)", fontsize=10)
-        ax.text(0.5, 0.5, "no units", transform=ax.transAxes,
-                ha="center", va="center", fontsize=9, color="#555555")
-        return ax
+    A: each unit normalised to its own mean, median and IQR across units.
+    B: every unit's rate on a symlog axis. C: cumulative spike count (no binning).
+    """
+    fig, (axA, axB, axC) = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
+    fig.suptitle(f"{name}  ·  {len(per_unit)} units  ·  {bin_s:.0f} s bins", fontsize=10)
 
-    t = rates["t_s"].to_numpy()
-    mean = rates["mean_hz"].to_numpy()
-    sem = rates["sem_hz"].to_numpy()
-    n = int(rates["n_units"].iloc[0])
+    if not len(per_unit):
+        axA.text(0.5, 0.5, "no units", transform=axA.transAxes, ha="center", color="#555555")
+        return fig
 
-    ax.plot(t, mean, color=PURPLE, lw=1.6)
-    ax.fill_between(t, mean - sem, mean + sem,
-                    color=PURPLE, alpha=0.25, linewidth=0)
+    m = per_unit.mean(axis=1, keepdims=True)
+    norm = np.divide(per_unit, m, out=np.zeros_like(per_unit, dtype=float), where=m > 0)
+    q25, q50, q75 = np.percentile(norm, [25, 50, 75], axis=0)
+    axA.plot(t_mid, q50, color=PURPLE, lw=1.6, label="median")
+    axA.fill_between(t_mid, q25, q75, color=PURPLE, alpha=0.25, linewidth=0, label="IQR")
+    axA.axhline(1, color="#555555", lw=0.6, ls=":")
+    axA.set_ylabel("Rate / unit mean")
+    axA.legend(loc="upper right")
+    axA.set_title("A")
 
-    ax.plot([], [], color=PURPLE, lw=1.6, label=f"mean ({n} {source}s)")
-    ax.fill_between([], [], color=PURPLE, alpha=0.25, linewidth=0, label="± SEM")
-    ax.legend(loc="upper right", fontsize=8, frameon=False)
-
-    top = (mean + sem).max() * 1.1
-    ax.set_ylim(0, top)
-    ax.set_xlim(0, t[-1] + (t[1] - t[0]) / 2 if len(t) > 1 else t[-1])
-    ax.set_ylabel(f"Mean firing rate per {source} (Hz)", fontsize=10)
-    ax.margins(x=0)
-
-    ax2 = ax.twinx()
-    ax2.set_ylim(0, top * n)
-    ax2.set_ylabel("Population rate (Hz)", fontsize=10)
-    ax2.tick_params(axis="y", labelsize=7)
-    ax2.spines["right"].set_visible(True)
-    ax2.spines["top"].set_visible(False)
-    return ax
-
-
-def unit_rates(rates: pd.DataFrame, per_unit: np.ndarray, ax=None,
-               source: str = "unit"):
-    """Every unit's rate over time, one line each."""
-    if ax is None:
-        _, ax = plt.subplots(figsize=(12, 4))
-
-    if per_unit is None or not per_unit.size:
-        ax.set_xlabel("Time (s)", fontsize=10)
-        ax.set_ylabel("Firing rate (Hz)", fontsize=10)
-        ax.text(0.5, 0.5, "no units", transform=ax.transAxes,
-                ha="center", va="center", fontsize=9, color="#555555")
-        return ax
-
-    t = rates["t_s"].to_numpy()
     for row in per_unit:
-        ax.plot(t, row, color=PURPLE, lw=0.8, alpha=0.6)
+        axB.plot(t_mid, row, color=PURPLE, lw=0.8, alpha=0.6)
+    axB.set_yscale("symlog", linthresh=0.1)
+    axB.set_ylim(0, None)
+    axB.set_ylabel("Firing rate (Hz)")
+    axB.set_title("B")
 
-    ax.set_ylim(0, per_unit.max() * 1.1)
-    ax.set_xlim(0, t[-1] + (t[1] - t[0]) / 2 if len(t) > 1 else t[-1])
-    ax.set_xlabel("Time (s)", fontsize=10)
-    ax.set_ylabel("Firing rate (Hz)", fontsize=10)
-    ax.margins(x=0)
-    return ax
+    for t in spike_times:
+        axC.step(np.r_[0, t, duration], np.r_[0, np.arange(1, len(t) + 1), len(t)],
+                 where="post", color=PURPLE, lw=0.8, alpha=0.6)
+    axC.set_yscale("symlog", linthresh=10)
+    axC.set_ylabel("Cumulative spikes")
+    axC.set_xlabel("Time (s)")
+    axC.set_xlim(0, duration)
+    axC.set_title("C")
+    return fig
+
+
+def diagnostics(isi_amps: dict, ncols: int = 4) -> Figure:
+    """Per unit: ISI histogram (0-50 ms) and amplitude histogram.
+
+    Real cell: empty ISIs below ~1.5 ms and a full bell of amplitudes.
+    Noise/multi-unit: ISIs near 0 or amplitudes cut off at threshold.
+    Mains: ISI peaks at 16.7 ms and multiples.
+    """
+    n = max(len(isi_amps), 1)
+    ncols = min(ncols, n)
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, 2 * ncols, figsize=(3.2 * ncols, 1.8 * nrows), squeeze=False)
+
+    for k, (uid, (isi, amp)) in enumerate(isi_amps.items()):
+        a_isi, a_amp = axes[k // ncols][2 * (k % ncols)], axes[k // ncols][2 * (k % ncols) + 1]
+        a_isi.hist(isi[isi < 50], bins=np.arange(0, 50.25, 0.25), color=PURPLE)
+        a_isi.axvspan(0, 1.5, color=RED, alpha=0.15, linewidth=0)
+        for f in (16.7, 33.3):
+            a_isi.axvline(f, color="#555555", lw=0.5, ls=":")
+        a_isi.set_title(f"unit {uid}  ·  {len(amp)} spikes", loc="left", fontsize=7)
+        a_amp.hist(amp, bins=40, color=BLUE)
+        for a, xl in ((a_isi, "ISI (ms)"), (a_amp, "amplitude (µV)")):
+            a.tick_params(labelsize=6)
+            a.set_xlabel(xl, fontsize=7)
+            a.set_yticks([])
+
+    for k in range(len(isi_amps), nrows * ncols):
+        for j in (0, 1):
+            axes[k // ncols][2 * (k % ncols) + j].axis("off")
+
+    fig.tight_layout()
+    return fig
 
 
 def waveforms(templates, unit_ids, units: pd.DataFrame, fs: float,
@@ -292,14 +300,12 @@ def waveforms(templates, unit_ids, units: pd.DataFrame, fs: float,
 
 
 def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
-            rates, params, name="", tag="", n_unit=None,
-            per_unit=None) -> Figure:
-    fig = plt.figure(figsize=(15, 9))
-    gs = GridSpec(3, 3, figure=fig, width_ratios=[1, 1.5, 0.8],
-            height_ratios=[1.2, 1, 1], hspace=0.35, wspace=0.28)
+            params, name="", tag="", n_unit=None) -> Figure:
+    fig = plt.figure(figsize=(15, 5))
+    gs = GridSpec(1, 3, figure=fig, width_ratios=[1, 1.5, 0.8], wspace=0.28)
 
     if tag:
-        fig.suptitle(tag, fontsize=12, y=0.98)
+        fig.suptitle(tag, fontsize=12, y=1.0)
 
     axA = fig.add_subplot(gs[0, 0])
     unit_map(units, locations, channel_ids, unit_chans, params, ax=axA)
@@ -318,25 +324,13 @@ def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
     axZ.text(0.5, 1.02, f"zoom: {zseg.shape[0]/fs*1000:.0f} ms",
              transform=axZ.transAxes, ha="center", fontsize=8)
 
-    axC = fig.add_subplot(gs[1, :])
-    population_rate(rates, ax=axC)
-    axC.set_title("C", loc="left")
-    axC.tick_params(labelbottom=False)
-
-    axD = fig.add_subplot(gs[2, :], sharex=axC)
-    unit_rates(rates, per_unit, ax=axD)
-    axD.set_title("D", loc="left")
-    axD.text(0.5, 1.02, f"{len(units)} units, one line each",
-             transform=axD.transAxes, ha="center", fontsize=8)
-
     fig.text(
-        0.5, 0.01,
+        0.5, -0.02,
         f"{name}  ·  {params.sorter}  ·  "
         f"{params.freq_min:.0f}–{params.freq_max:.0f} Hz band-pass  ·  "
         f"{params.common_reference} reference  ·  "
-        f"merge ≤ {params.merge_thresh:g}  ·  "
-        f"snr ≥ {params.min_snr:g}, isi ≤ {params.max_isi_viol:g}  ·  "
-        f"one source = one sorted unit",
+        f"snr ≥ {params.min_snr:g}, presence ≥ {params.min_presence:g}, "
+        f"≥ {params.min_spikes} spikes",
         ha="center", fontsize=7, color="#555555",
     )
     return fig

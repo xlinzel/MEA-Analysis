@@ -17,7 +17,7 @@ from elephant.statistics import cv, cv2, isi
 import spikeinterface.full as si
 
 # local
-from meakit.core import Data, Params, Project, result_dir
+from meakit.core import Data, Params, Project, result_dir, unit_footprints
 
 # logger
 logger = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ def unit_stats(data: Data) -> pd.DataFrame:
 
     if not frames:
         raise ValueError(f"{data.name}: no metric extensions computed")
+    frames.append(unit_footprints(an))
 
     df = pd.concat(frames, axis=1)
     df.index.name = "unit_id"
@@ -82,37 +83,33 @@ def unit_channels(data: Data) -> dict:
 
 
 
-def rate_over_time(data: Data, bin_s: float = 10.0) -> tuple[pd.DataFrame, np.ndarray]:
-    """Mean firing rate across units, binned over the recording.
+def rate_over_time(data: Data, bin_s: float | None = None
+                   ) -> tuple[np.ndarray, np.ndarray, float]:
+    """Per-unit rate in equal bins that exactly cover the recording.
 
-    One row per bin: t_s, mean_hz, sem_hz, n_units.
+    bin_s=None sizes bins so the median unit expects >= 10 spikes (10-60 s).
+    Returns (bin centres in s, per_unit rates (units, bins) in Hz, bin_s).
     """
-    logger.info("Binning unit firing rate for %s at %.0f s", data.name, bin_s)
-
     dur = data.recording.get_total_duration()
     times = unit_spike_times(data)
+    if bin_s is None:
+        med = np.median([len(t) / dur for t in times]) if times else 1.0
+        bin_s = float(np.clip(10 / max(med, 1e-3), 10.0, 60.0))
 
-    if not times:
-        logger.warning("%s: no units", data.name)
-        return (pd.DataFrame(columns=["t_s", "mean_hz", "sem_hz",
-                                      "total_hz", "n_units"]),
-                np.empty((0, 0)))
+    edges = np.linspace(0.0, dur, max(1, int(round(dur / bin_s))) + 1)
+    widths = np.diff(edges)
+    per_unit = np.array([np.histogram(t, bins=edges)[0] / widths for t in times]
+                        or np.zeros((0, len(widths))))
+    logger.info("%s: rate bins of %.1f s", data.name, widths[0])
+    return edges[:-1] + widths / 2, per_unit, float(widths[0])
 
-    edges = np.arange(0, dur + bin_s, bin_s)
-    if edges[-1] > dur:
-        edges = edges[:-1]
 
-    per_unit = np.array([np.histogram(t, bins=edges)[0] / bin_s for t in times])
-    n = per_unit.shape[0]
-
-    summary = pd.DataFrame({
-        "t_s": edges[:-1] + bin_s / 2,
-        "mean_hz": per_unit.mean(axis=0),
-        "sem_hz": per_unit.std(axis=0) / np.sqrt(n),
-        "total_hz": per_unit.sum(axis=0),
-        "n_units": n,
-    })
-    return summary, per_unit
+def isi_amplitudes(data: Data) -> dict:
+    """Unit id -> (ISIs in ms, spike amplitudes in µV)."""
+    amps = data.analyzer.get_extension("spike_amplitudes").get_data(
+        outputs="by_unit", concatenated=True)
+    return {uid: (np.diff(t) * 1e3, amps[uid])
+            for uid, t in zip(data.sorting.unit_ids, unit_spike_times(data))}
 
 
 def trace_segment(data: Data, units: pd.DataFrame, n_channels: int = 8,

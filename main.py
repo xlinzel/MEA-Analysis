@@ -20,11 +20,8 @@ if __name__ == "__main__":
     _configure_logging()
 
     project = Project(Path("tests/project"))
-    params_dict = (
-        Params(sorter="herdingspikes"),
-        # SC2 keeps its whitening but must not re-filter/re-reference our recording
-        Params(sorter="spykingcircus2", sorter_params={"apply_preprocessing": False}),
-    )
+    # per-sorter settings live in core.SORTER_DEFAULTS; override with Params(sorter_params=...)
+    params_dict = tuple(Params(sorter=s) for s in ("spykingcircus2", "herdingspikes", "kilosort4"))
 
     configure_runtime()
 
@@ -42,7 +39,6 @@ if __name__ == "__main__":
             data = curate(data, params, project, force=True)
 
             units = metrics.unit_stats(data)
-            rates, per_unit = metrics.rate_over_time(data)
             chans = metrics.unit_channels(data)
 
             seg, t0, fs, n_unit = metrics.trace_segment(data, units, seconds=1.0)
@@ -51,18 +47,20 @@ if __name__ == "__main__":
 
             metrics.write_tables(data, project, units)
 
-            fig = plots.summary(units, data.locations, data.recording.channel_ids,
-                                chans, seg, zseg, fs, rates, params,
-                                data.name, data.tag, n_unit, per_unit)
-
             figdir = result_dir(project, data.name) / "figures"
             figdir.mkdir(parents=True, exist_ok=True)
-            stem = data.tag.replace(" ", "_") if data.tag else data.name
-            fig.savefig(figdir / f"{stem}_{params.sorter}.png")
-            plt.close(fig)
+            stem = f"{data.tag.replace(' ', '_') if data.tag else data.name}_{params.sorter}"
 
+            t_mid, per_unit, bin_s = metrics.rate_over_time(data)
             templates = data.analyzer.get_extension("templates").get_data()
-            uids = list(data.sorting.unit_ids)
-            fig2 = plots.waveforms(templates, uids, units, fs)
-            fig2.savefig(figdir / f"{stem}_waveforms__{params.sorter}.png")
-            plt.close(fig2)
+            figs = {
+                "summary": plots.summary(units, data.locations, data.recording.channel_ids,
+                                         chans, seg, zseg, fs, params, data.name, data.tag, n_unit),
+                "rates": plots.rates(t_mid, per_unit, bin_s, metrics.unit_spike_times(data),
+                                     data.recording.get_total_duration(), data.name),
+                "waveforms": plots.waveforms(templates, list(data.sorting.unit_ids), units, fs),
+                "diagnostics": plots.diagnostics(metrics.isi_amplitudes(data)),
+            }
+            for kind, fig in figs.items():
+                fig.savefig(figdir / f"{stem}_{kind}.png")
+                plt.close(fig)
