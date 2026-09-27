@@ -24,7 +24,9 @@ SLICES = {
 }
 
 
-def figures(data, params, project, silent_chans=()):
+def figures(data, params, project, silent_chans=(), band="range"):
+    """band: spread shaded around the mean rate in the summary, "range" (min-max),
+    "iqr" (interquartile), "sem" (± standard error) or "none"."""
     units = metrics.unit_stats(data)
     chans = metrics.unit_channels(data)
 
@@ -42,7 +44,8 @@ def figures(data, params, project, silent_chans=()):
     figs = {
         "summary": plots.summary(units, data.locations, data.recording.channel_ids,
                                  chans, seg, zseg, fs, params, data.name, data.tag, n_unit,
-                                 t_mid, per_unit, bin_s, silent_chans=silent_chans),
+                                 t_mid, per_unit, bin_s, band=band,
+                                 silent_chans=silent_chans),
         "rates": plots.rates(t_mid, per_unit, bin_s, metrics.unit_spike_times(data),
                              data.recording.get_total_duration(), data.name),
         "waveforms": plots.waveforms(templates, list(data.sorting.unit_ids), units, fs),
@@ -83,4 +86,4 @@ if __name__ == "__main__":
             # electrodes seen in each recording, so a map can show those gone silent
             seen = [{c for cs in metrics.unit_channels(d).values() for c in cs} for d in parts]
             for data, here in zip(parts, seen):
-                figures(data, params, project, set().union(*seen) - here)
+                figures(data, params, project, set().union(*seen) - here, band="range")
