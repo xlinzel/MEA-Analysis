@@ -490,8 +490,11 @@ def split(data: Data, params: Params, project: Project, force: bool = True) -> l
 def curate_together(parts: list[Data], params: Params, project: Project, force: bool = False) -> list[Data]:
     """Curate split recordings as one: a unit passing the rules in any recording is kept in all.
 
-    A cell near a cutoff then cannot appear in one condition and vanish in the next,
-    and a cell silenced by a condition stays in the table with its (near) zero rate.
+    A cell near a cutoff then cannot appear in one condition and vanish in the next.
+    Per recording, a kept unit that fails there is still counted when its rate is below
+    min_rate_hz (a silenced cell, so means are not inflated) or it fails only SNR, presence
+    or amplitude cutoff (a weaker real cell). It is left out of that recording when it fails
+    footprint or refractory at a real rate: that is noise the template absorbed.
     """
     tables = [_curation_table(p.analyzer, params) for p in parts]
     keep = sorted(set().union(*(t.index[t["keep"]] for t in tables)))
@@ -500,9 +503,14 @@ def curate_together(parts: list[Data], params: Params, project: Project, force: 
     out = []
     for p, units in zip(parts, tables):
         base = result_dir(project, p.name) / f"analyzer_{params.sorter}"
+        noise = (units["rejected_by"].str.contains("footprint|refractory")
+                 & (units["firing_rate"].fillna(0) >= params.min_rate_hz))
         units["keep_joint"] = units.index.isin(keep)
+        units["in_recording"] = units["keep_joint"] & ~noise
         units.to_csv(f"{base}_curation.csv", index_label="unit_id")
-        an = _cached_analyzer(Path(f"{base}_curated"), force, lambda: p.analyzer.select_units(keep))
+        ids = units.index[units["in_recording"]].to_list()
+        logger.info("%s: units %s, left out as noise here %s", p.name, ids, sorted(set(keep) - set(ids)))
+        an = _cached_analyzer(Path(f"{base}_curated"), force, lambda: p.analyzer.select_units(ids))
         out.append(replace(p, analyzer=an, sorting=an.sorting))
     return out
 
