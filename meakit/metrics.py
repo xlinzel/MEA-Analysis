@@ -71,16 +71,21 @@ def unit_spike_times(data: Data) -> list[np.ndarray]:
     ]
 
 
-def unit_channels(data: Data) -> dict:
-    """Unit id -> the channel ids that unit appears on."""
+def unit_channels(data: Data, k: float = 3.0) -> dict:
+    """Unit id -> channel ids where its template exceeds k x noise, strongest first.
+
+    Same test as the curation footprint, so the map shows only electrodes that
+    actually see the unit rather than every electrode in the sparsity radius.
+    """
     an = data.analyzer
-    if an is None or an.sparsity is None:
-        logger.warning("%s: no sparsity, falling back to peak channel", data.name)
-        ext = si.get_template_extremum_channel(an)
-        return {uid: [ch] for uid, ch in ext.items()}
-
-    return an.sparsity.unit_id_to_channel_ids
-
+    amp = np.abs(an.get_extension("templates").get_data()).max(axis=1)   # (units, channels)
+    noise = an.get_extension("noise_levels").get_data()
+    out = {}
+    for uid, a in zip(an.unit_ids, amp):
+        idx = np.flatnonzero(a > k * noise)
+        idx = idx[np.argsort(-a[idx])] if len(idx) else [a.argmax()]
+        out[uid] = list(an.channel_ids[idx])
+    return out
 
 
 def rate_over_time(data: Data, bin_s: float | None = None

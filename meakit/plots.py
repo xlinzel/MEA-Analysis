@@ -310,7 +310,7 @@ def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
     axA = fig.add_subplot(gs[0, 0])
     unit_map(units, locations, channel_ids, unit_chans, params, ax=axA)
     axA.set_title("A", loc="left")
-    axA.text(0.5, 1.02, f"{len(units)} units, purple = unit electrodes, black = centres",
+    axA.text(0.5, 1.02, f"{len(units)} units, purple = electrodes > 3× noise, black = centres",
              transform=axA.transAxes, ha="center", fontsize=8)
 
     axB = fig.add_subplot(gs[0, 1])
