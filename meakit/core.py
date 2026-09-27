@@ -94,7 +94,7 @@ class Params:
     fast_rate_hz: float = 2.0
     max_rp_contamination: float = 0.2
     max_isi_count_slow: int = 1
-    sorter: str = "herdingspikes"
+    sorter: str = "spykingcircus2"
     sorter_params: dict = field(default_factory=dict)
     extensions: dict = field(default_factory=lambda: dict(DEFAULT_EXTENSIONS))
 
