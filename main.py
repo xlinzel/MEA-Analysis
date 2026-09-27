@@ -16,9 +16,10 @@ from meakit import plots
 
 
 
-# recordings of one slice are sorted together so units keep their id across conditions
+# recordings of one slice are sorted together so units keep their id across conditions;
+# they must share electrodes (concatenate raises if they don't)
 SLICES = {
-    "Lumbar_S2": ("000005", "000007", "000008"),
+    # "Lumbar_S2": ("000005", "000007", "000008"),   # Baseline and E2/TTX share no electrodes
     "Thoracic_S3": ("000012", "000013", "000014"),
     "Lumbar_S1": ("000015", "000018", "000019"),
 }
