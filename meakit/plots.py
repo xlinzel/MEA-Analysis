@@ -306,8 +306,12 @@ def waveforms(templates, unit_ids, units: pd.DataFrame, fs: float,
 
 def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
             params, name="", tag="", n_unit=None,
-            t=None, per_unit=None, window_s=None) -> Figure:
-    """A: unit map, B: traces (+ zoom), C: mean firing rate across units over time."""
+            t=None, per_unit=None, window_s=None, band: str = "range") -> Figure:
+    """A: unit map, B: traces (+ zoom), C: mean firing rate across units over time.
+
+    band: spread shown around the mean in C: "range" (min-max across units),
+    "iqr" (25th-75th percentile) or "sem" (± standard error of the mean).
+    """
     fig = plt.figure(figsize=(15, 8.5))
     gs = GridSpec(2, 3, figure=fig, width_ratios=[1, 1.5, 0.8], height_ratios=[1.3, 0.7],
                   wspace=0.28, hspace=0.35)
@@ -335,7 +339,16 @@ def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
     axC = fig.add_subplot(gs[1, :])
     axC.set_title("C", loc="left")
     if per_unit is not None and len(per_unit):
-        axC.plot(t, per_unit.mean(axis=0), color=PURPLE, lw=1.4)
+        mean = per_unit.mean(axis=0)
+        sem = per_unit.std(axis=0) / np.sqrt(len(per_unit))
+        lo, hi, band_label = {
+            "range": (per_unit.min(axis=0), per_unit.max(axis=0), "Min–max across units"),
+            "iqr": (*np.percentile(per_unit, [25, 75], axis=0), "Interquartile range"),
+            "sem": (mean - sem, mean + sem, "± SEM"),
+        }[band]
+        axC.fill_between(t, lo, hi, color=PURPLE, alpha=0.2, linewidth=0, label=band_label)
+        axC.plot(t, mean, color=PURPLE, lw=1.4, label=f"Mean ({len(per_unit)} units)")
+        axC.legend(loc="upper right")
         axC.set_xlim(0, t[-1] + (t[1] - t[0]) / 2 if len(t) > 1 else t[-1])
         axC.set_ylim(0, None)
         axC.text(0.5, 1.02, f"mean of {len(per_unit)} units, {window_s:.0f} s sliding window",
