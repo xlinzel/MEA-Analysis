@@ -57,7 +57,7 @@ def figures(data, params, project, silent_chans=(), band="range"):
         plt.close(fig)
 
 
-def comparison(parts, slice_name, params, project, band="range"):
+def comparison(parts, slice_name, params, project, band="sem"):
     """All recordings of a slice in one figure, rates on a shared window."""
     window_s = max(metrics.rate_over_time(d)[2] for d in parts)
     recs = []
@@ -106,4 +106,4 @@ if __name__ == "__main__":
             seen = [{c for cs in metrics.unit_channels(d).values() for c in cs} for d in parts]
             for data, here in zip(parts, seen):
                 figures(data, params, project, set().union(*seen) - here, band="range")
-            comparison(parts, slice_name, params, project, band="range")
+            comparison(parts, slice_name, params, project, band="sem")

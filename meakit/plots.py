@@ -26,7 +26,7 @@ GREY_L = "#dcdcdc"
 RED_L = "#f1a3a3"   # electrodes of units active only in other recordings of the slice
 GREY_M = "#cfcfcf"
 BG     = "#f0f0f0"
-CONDITIONS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]   # one per recording, in order
+CONDITIONS = ["#2d1650", PURPLE, "#a47fd6", "#d4c2ef"]   # purple ramp, one per recording, in order
 
 def apply_style() -> None:
 
@@ -384,7 +384,7 @@ def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
     return fig
 
 
-def comparison(recs: list[dict], locations, channel_ids, window_s, band="range", name="") -> Figure:
+def comparison(recs: list[dict], locations, channel_ids, window_s, band="sem", name="") -> Figure:
     """One slice, all recordings: A electrodes per recording, B mean rates overlaid, C rate per unit.
 
     recs: one dict per recording, in order, with label, unit_chans, t, per_unit and
@@ -402,10 +402,11 @@ def comparison(recs: list[dict], locations, channel_ids, window_s, band="range",
 
     axA = fig.add_subplot(gs[:, 0])
     axA.scatter(locations[:, 0], locations[:, 1], s=5, c=GREY_L, edgecolors="none")
-    for k, (r, c, lab) in enumerate(zip(recs, colors, labels)):   # later recordings smaller, on top
+    sizes = np.geomspace(75, 12, len(recs))   # concentric: first recording largest, at the back
+    for k, (r, c, lab) in enumerate(zip(recs, colors, labels)):
         idx = sorted({pos[ch] for chs in r["unit_chans"].values() for ch in chs if ch in pos})
-        axA.scatter(locations[idx, 0], locations[idx, 1], s=40 / (k + 1) ** 1.2, c=c,
-                    edgecolors="white", linewidths=0.4, label=lab)
+        axA.scatter(locations[idx, 0], locations[idx, 1], s=sizes[k], c=c,
+                    edgecolors="none", zorder=2 + k, label=lab)
     axA.set_aspect("equal"); axA.invert_yaxis()
     axA.set_xlabel("x position (µm)"); axA.set_ylabel("y position (µm)")
     axA.legend(loc="lower right", fontsize=8, title="Electrodes > 3× noise", title_fontsize=8)
