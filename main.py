@@ -21,7 +21,8 @@ if __name__ == "__main__":
 
     project = Project(Path("tests/project"))
     # per-sorter settings live in core.SORTER_DEFAULTS; override with Params(sorter_params=...)
-    params_dict = tuple(Params(sorter=s) for s in ("spykingcircus2", "herdingspikes", "kilosort4"))
+    # SC2 is the validated choice; "herdingspikes" and "kilosort4" (GPU) also run
+    params_dict = tuple(Params(sorter=s) for s in ("spykingcircus2",))
 
     configure_runtime()
 
