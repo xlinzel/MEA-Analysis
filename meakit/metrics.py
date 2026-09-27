@@ -88,25 +88,31 @@ def unit_channels(data: Data, k: float = 3.0) -> dict:
     return out
 
 
-def rate_over_time(data: Data, bin_s: float | None = None
+def rate_over_time(data: Data, window_s: float | None = None, step_s: float = 1.0
                    ) -> tuple[np.ndarray, np.ndarray, float]:
-    """Per-unit rate in equal bins that exactly cover the recording.
+    """Per-unit firing rate as a Gaussian-weighted moving average, sampled every step_s.
 
-    bin_s=None sizes bins so the median unit expects >= 10 spikes (10-60 s).
-    Returns (bin centres in s, per_unit rates (units, bins) in Hz, bin_s).
+    window_s is the kernel's full width at half maximum. None sizes it so the median
+    unit has ~10 spikes in it (60-120 s). At the recording edges the kernel is
+    truncated and renormalised, so no rate is lost or invented there.
+    Returns (times in s, per_unit rates (units, times) in Hz, window_s).
     """
     dur = data.recording.get_total_duration()
     times = unit_spike_times(data)
-    if bin_s is None:
+    if window_s is None:
         med = np.median([len(t) / dur for t in times]) if times else 1.0
-        bin_s = float(np.clip(10 / max(med, 1e-3), 10.0, 60.0))
+        window_s = float(np.clip(10 / max(med, 1e-3), 60.0, 120.0))
 
-    edges = np.linspace(0.0, dur, max(1, int(round(dur / bin_s))) + 1)
-    widths = np.diff(edges)
-    per_unit = np.array([np.histogram(t, bins=edges)[0] / widths for t in times]
-                        or np.zeros((0, len(widths))))
-    logger.info("%s: rate bins of %.1f s", data.name, widths[0])
-    return edges[:-1] + widths / 2, per_unit, float(widths[0])
+    edges = np.linspace(0.0, dur, max(1, int(round(dur / step_s))) + 1)
+    n, sigma = len(edges) - 1, window_s / 2.355 / step_s  # FWHM -> sigma, in steps
+    half = int(3 * sigma)
+    kernel = np.exp(-0.5 * (np.arange(-half, half + 1) / sigma) ** 2)
+    smooth = lambda c: np.convolve(c, kernel)[half:half + n]   # centred, any kernel length
+    width = smooth(np.diff(edges))
+    per_unit = np.array([smooth(np.histogram(t, bins=edges)[0]) / width
+                         for t in times] or np.zeros((0, n)))
+    logger.info("%s: moving-average window %.0f s", data.name, window_s)
+    return (edges[:-1] + edges[1:]) / 2, per_unit, window_s
 
 
 def isi_amplitudes(data: Data) -> dict:

@@ -108,8 +108,8 @@ def unit_map(units: pd.DataFrame, locations: np.ndarray, channel_ids,
 
     ax.set_aspect("equal")
     ax.invert_yaxis()
-    ax.set_xlabel("x (µm)")
-    ax.set_ylabel("y (µm)")
+    ax.set_xlabel("x position (µm)")
+    ax.set_ylabel("y position (µm)")
 
     if standalone:
         ax.set_title(name, loc="left")
@@ -161,14 +161,14 @@ def traces(seg, fs, ax=None, offset_uv=120.0, lw=0.5, ms=False, n_unit=None):
 
 
 
-def rates(t_mid, per_unit, bin_s, spike_times, duration, name="") -> Figure:
+def rates(t, per_unit, window_s, spike_times, duration, name="") -> Figure:
     """Rate over time without letting one fast unit dominate.
 
     A: each unit normalised to its own mean, median and IQR across units.
-    B: every unit's rate on a symlog axis. C: cumulative spike count (no binning).
+    B: every unit's moving-average rate. C: cumulative spike count (no smoothing).
     """
-    fig, (axA, axB, axC) = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
-    fig.suptitle(f"{name}  ·  {len(per_unit)} units  ·  {bin_s:.0f} s bins", fontsize=10)
+    fig, (axA, axB, axC) = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+    fig.suptitle(f"{name}  ·  {len(per_unit)} units  ·  {window_s:.0f} s Gaussian moving average (FWHM)", fontsize=10)
 
     if not len(per_unit):
         axA.text(0.5, 0.5, "no units", transform=axA.transAxes, ha="center", color="#555555")
@@ -177,28 +177,32 @@ def rates(t_mid, per_unit, bin_s, spike_times, duration, name="") -> Figure:
     m = per_unit.mean(axis=1, keepdims=True)
     norm = np.divide(per_unit, m, out=np.zeros_like(per_unit, dtype=float), where=m > 0)
     q25, q50, q75 = np.percentile(norm, [25, 50, 75], axis=0)
-    axA.plot(t_mid, q50, color=PURPLE, lw=1.6, label="median")
-    axA.fill_between(t_mid, q25, q75, color=PURPLE, alpha=0.25, linewidth=0, label="IQR")
+    axA.plot(t, q50, color=PURPLE, lw=1.6, label="Median across units")
+    axA.fill_between(t, q25, q75, color=PURPLE, alpha=0.25, linewidth=0, label="Interquartile range")
     axA.axhline(1, color="#555555", lw=0.6, ls=":")
-    axA.set_ylabel("Rate / unit mean")
+    axA.set_ylabel("Normalised firing rate\n(× unit mean)")
     axA.legend(loc="upper right")
-    axA.set_title("A")
 
     for row in per_unit:
-        axB.plot(t_mid, row, color=PURPLE, lw=0.8, alpha=0.6)
+        axB.plot(t, row, color=PURPLE, lw=1.0, alpha=0.7)
     axB.set_yscale("symlog", linthresh=0.1)
     axB.set_ylim(0, None)
-    axB.set_ylabel("Firing rate (Hz)")
-    axB.set_title("B")
+    axB.set_ylabel("Firing rate per unit (Hz)")
 
-    for t in spike_times:
-        axC.step(np.r_[0, t, duration], np.r_[0, np.arange(1, len(t) + 1), len(t)],
-                 where="post", color=PURPLE, lw=0.8, alpha=0.6)
+    for st in spike_times:
+        axC.step(np.r_[0, st, duration], np.r_[0, np.arange(1, len(st) + 1), len(st)],
+                 where="post", color=PURPLE, lw=1.0, alpha=0.7)
     axC.set_yscale("symlog", linthresh=10)
-    axC.set_ylabel("Cumulative spikes")
-    axC.set_xlabel("Time (s)")
+    axC.set_ylabel("Cumulative spike count")
+
+    for ax, letter in ((axA, "A"), (axB, "B"), (axC, "C")):
+        ax.set_title(letter)
+        ax.set_xlabel("Time (s)")
+        ax.tick_params(labelbottom=True)
+        if ax.get_yscale() == "symlog":
+            ax.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     axC.set_xlim(0, duration)
-    axC.set_title("C")
+    fig.tight_layout()
     return fig
 
 
@@ -222,10 +226,10 @@ def diagnostics(isi_amps: dict, ncols: int = 4) -> Figure:
             a_isi.axvline(f, color="#555555", lw=0.5, ls=":")
         a_isi.set_title(f"unit {uid}  ·  {len(amp)} spikes", loc="left", fontsize=7)
         a_amp.hist(amp, bins=40, color=BLUE)
-        for a, xl in ((a_isi, "ISI (ms)"), (a_amp, "amplitude (µV)")):
+        for a, xl in ((a_isi, "Inter-spike interval (ms)"), (a_amp, "Spike amplitude (µV)")):
             a.tick_params(labelsize=6)
             a.set_xlabel(xl, fontsize=7)
-            a.set_yticks([])
+            a.set_ylabel("Spike count", fontsize=7)
 
     for k in range(len(isi_amps), nrows * ncols):
         for j in (0, 1):
@@ -288,9 +292,9 @@ def waveforms(templates, unit_ids, units: pd.DataFrame, fs: float,
         a.spines[["top", "right"]].set_visible(False)
         a.tick_params(labelsize=6)
         if k // ncols == nrows - 1:
-            a.set_xlabel("ms", fontsize=8)
+            a.set_xlabel("Time (ms)", fontsize=8)
         if k % ncols == 0:
-            a.set_ylabel("µV", fontsize=8)
+            a.set_ylabel("Amplitude (µV)", fontsize=8)
 
     for k in range(n, nrows * ncols):
         axes[k // ncols][k % ncols].axis("off")
