@@ -365,7 +365,7 @@ def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
         f"{params.freq_min:.0f}–{params.freq_max:.0f} Hz band-pass  ·  "
         f"{params.common_reference} reference  ·  "
         f"snr ≥ {params.min_snr:g}, presence ≥ {params.min_presence:g}, "
-        f"≥ {params.min_spikes} spikes",
+        f"rate ≥ {params.min_rate_hz:g} Hz",
         ha="center", fontsize=7, color="#555555",
     )
     return fig

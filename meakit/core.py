@@ -87,10 +87,10 @@ class Params:
     merge_min_spikes: int = 30
     duplicate_fraction: float = 0.5   # shared spikes (±0.4 ms) that mark a duplicate
     # curation
-    min_snr: float = 5.0
+    min_snr: float = 4.5
     max_amp_cutoff: float = 0.1
     min_presence: float = 0.5   # slice activity runs down / TTX washes in over minutes
-    min_spikes: int = 50
+    min_rate_hz: float = 0.05   # a rate, so the cutoff does not depend on recording length
     fast_rate_hz: float = 2.0
     max_rp_contamination: float = 0.2
     max_isi_count_slow: int = 1
@@ -115,6 +115,7 @@ class Data:
     sorting: si.BaseSorting | None = None
     analyzer: si.SortingAnalyzer | None = None
     peaks: np.ndarray | None = None
+    parts: tuple = ()   # the recordings a concatenated Data was built from (see concatenate)
 
 
 # public functions
@@ -442,29 +443,13 @@ def curate(data: Data, params: Params, project: Project, force: bool = False) ->
     base = result_dir(project, data.name) / f"analyzer_{params.sorter}"
 
     def cb():
-        an = data.analyzer
-        units = an.get_extension("quality_metrics").get_data().join(unit_footprints(an))
-        fast = units["firing_rate"] >= params.fast_rate_hz
-        rules = pd.DataFrame({
-            "snr": units["snr"] >= params.min_snr,
-            "amplitude_cutoff": units["amplitude_cutoff"].isna()
-                                | (units["amplitude_cutoff"] <= params.max_amp_cutoff),
-            "presence_ratio": units["presence_ratio"] >= params.min_presence,
-            "num_spikes": units["num_spikes"] >= params.min_spikes,
-            # contamination is only measurable for fast units; slow units get a count
-            "refractory": np.where(fast, units["rp_contamination"] <= params.max_rp_contamination,
-                                   units["isi_violations_count"] <= params.max_isi_count_slow),
-            "footprint": ~units["single_electrode"],
-        })
-        units["keep"] = rules.all(axis=1)
-        units["rejected_by"] = rules.apply(lambda r: ",".join(r.index[~r.to_numpy(bool)]), axis=1)
-
+        units = _curation_table(data.analyzer, params)
         logger.info("%s curation:\n%s", data.name, units[
             ["snr", "firing_rate", "num_spikes", "footprint_n", "keep", "rejected_by"]
         ].sort_values("snr", ascending=False).to_string())
         units.to_csv(f"{base}_curation.csv", index_label="unit_id")
 
-        return an.select_units(units.index[units["keep"]].to_list())
+        return data.analyzer.select_units(units.index[units["keep"]].to_list())
 
     analyzer = _cached_analyzer(Path(f"{base}_curated"), force, cb)
 
@@ -472,6 +457,54 @@ def curate(data: Data, params: Params, project: Project, force: bool = False) ->
                 data.analyzer.get_num_units(), analyzer.get_num_units())
 
     return replace(data, analyzer=analyzer, sorting=analyzer.sorting)
+
+
+def concatenate(datas: list[Data], name: str) -> Data:
+    """Join preprocessed recordings of one slice end to end so they are sorted as one.
+
+    Only electrodes present in every recording are kept. After sort/analyze/compute/merge
+    on the result, split() cuts it back into the original recordings with shared unit ids.
+    """
+    common = [c for c in datas[0].recording.channel_ids
+              if all(c in d.recording.channel_ids for d in datas[1:])]
+    parts = tuple(replace(d, recording=d.recording.select_channels(common), peaks=None,
+                          locations=d.recording.select_channels(common).get_channel_locations())
+                  for d in datas)
+    rec = si.concatenate_recordings([p.recording for p in parts])
+    logger.info("%s: %s concatenated, %d common channels, %.0f s",
+                name, [d.name for d in datas], len(common), rec.get_total_duration())
+    return replace(parts[0], name=name, tag=" + ".join(d.tag or d.name for d in datas),
+                   recording=rec, parts=parts)
+
+
+def split(data: Data, params: Params, project: Project, force: bool = True) -> list[Data]:
+    """Cut a concatenated sorting back into its recordings, each with its own analyzer."""
+    sortings = si.split_sorting(data.sorting, data.recording)
+    out = []
+    for i, part in enumerate(data.parts):
+        p = replace(part, sorting=si.select_segment_sorting(sortings, i))
+        out.append(compute(analyze(p, params, project, force), params))
+    return out
+
+
+def curate_together(parts: list[Data], params: Params, project: Project, force: bool = False) -> list[Data]:
+    """Curate split recordings as one: a unit passing the rules in any recording is kept in all.
+
+    A cell near a cutoff then cannot appear in one condition and vanish in the next,
+    and a cell silenced by a condition stays in the table with its (near) zero rate.
+    """
+    tables = [_curation_table(p.analyzer, params) for p in parts]
+    keep = sorted(set().union(*(t.index[t["keep"]] for t in tables)))
+    logger.info("Joint curation of %s: keeping %s", [p.name for p in parts], keep)
+
+    out = []
+    for p, units in zip(parts, tables):
+        base = result_dir(project, p.name) / f"analyzer_{params.sorter}"
+        units["keep_joint"] = units.index.isin(keep)
+        units.to_csv(f"{base}_curation.csv", index_label="unit_id")
+        an = _cached_analyzer(Path(f"{base}_curated"), force, lambda: p.analyzer.select_units(keep))
+        out.append(replace(p, analyzer=an, sorting=an.sorting))
+    return out
 
 
 def unit_footprints(an: si.SortingAnalyzer, k: float = 3.0, neighbour_um: float = 35.0) -> pd.DataFrame:
@@ -559,6 +592,26 @@ def _build_analyzer(sorting, recording, params: Params, folder: Path) -> si.Sort
 
     return si.create_sorting_analyzer(sorting=sorting, recording=recording, format="binary_folder",
                                       folder=folder, overwrite=True, sparsity=sp)
+
+
+def _curation_table(an: si.SortingAnalyzer, params: Params) -> pd.DataFrame:
+    """Quality metrics + footprint per unit, with the rule outcome in keep / rejected_by."""
+    units = an.get_extension("quality_metrics").get_data().join(unit_footprints(an))
+    fast = units["firing_rate"] >= params.fast_rate_hz
+    rules = pd.DataFrame({
+        "snr": units["snr"] >= params.min_snr,
+        "amplitude_cutoff": units["amplitude_cutoff"].isna()
+                            | (units["amplitude_cutoff"] <= params.max_amp_cutoff),
+        "presence_ratio": units["presence_ratio"] >= params.min_presence,
+        "firing_rate": units["firing_rate"] >= params.min_rate_hz,
+        # contamination is only measurable for fast units; slow units get a count
+        "refractory": np.where(fast, units["rp_contamination"] <= params.max_rp_contamination,
+                               units["isi_violations_count"] <= params.max_isi_count_slow),
+        "footprint": ~units["single_electrode"],
+    })
+    units["keep"] = rules.all(axis=1)
+    units["rejected_by"] = rules.apply(lambda r: ",".join(r.index[~r.to_numpy(bool)]), axis=1)
+    return units
 
 
 def _cached_analyzer(path: Path, force: bool, build: Callable[[], si.SortingAnalyzer]) -> si.SortingAnalyzer:
