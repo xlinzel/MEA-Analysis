@@ -165,10 +165,10 @@ def rates(t, per_unit, window_s, spike_times, duration, name="") -> Figure:
     """Rate over time without letting one fast unit dominate.
 
     A: each unit normalised to its own mean, median and IQR across units.
-    B: every unit's moving-average rate. C: cumulative spike count (no smoothing).
+    B: every unit's sliding-window rate. C: cumulative spike count (no smoothing).
     """
     fig, (axA, axB, axC) = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
-    fig.suptitle(f"{name}  ·  {len(per_unit)} units  ·  {window_s:.0f} s Gaussian moving average (FWHM)", fontsize=10)
+    fig.suptitle(f"{name}  ·  {len(per_unit)} units  ·  {window_s:.0f} s sliding-window average", fontsize=10)
 
     if not len(per_unit):
         axA.text(0.5, 0.5, "no units", transform=axA.transAxes, ha="center", color="#555555")

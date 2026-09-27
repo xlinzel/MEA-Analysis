@@ -88,30 +88,33 @@ def unit_channels(data: Data, k: float = 3.0) -> dict:
     return out
 
 
-def rate_over_time(data: Data, window_s: float | None = None, step_s: float = 1.0
-                   ) -> tuple[np.ndarray, np.ndarray, float]:
-    """Per-unit firing rate as a Gaussian-weighted moving average, sampled every step_s.
+def rate_over_time(data: Data, window_s: float | None = None, step_s: float = 1.0,
+                   smooth_s: float = 0.0) -> tuple[np.ndarray, np.ndarray, float]:
+    """Per-unit firing rate as a sliding-window average, sampled every step_s.
 
-    window_s is the kernel's full width at half maximum. None sizes it so the median
-    unit has ~10 spikes in it (60-120 s). At the recording edges the kernel is
-    truncated and renormalised, so no rate is lost or invented there.
+    window_s=None sizes the window so the median unit has ~10 spikes in it (30-120 s).
+    smooth_s > 0 adds Gaussian smoothing with that sigma (s); 0 leaves the rate unsmoothed.
+    At the recording edges windows are truncated and normalised by their real width.
     Returns (times in s, per_unit rates (units, times) in Hz, window_s).
     """
     dur = data.recording.get_total_duration()
     times = unit_spike_times(data)
     if window_s is None:
         med = np.median([len(t) / dur for t in times]) if times else 1.0
-        window_s = float(np.clip(10 / max(med, 1e-3), 60.0, 120.0))
+        window_s = float(np.clip(10 / max(med, 1e-3), 30.0, 120.0))
 
     edges = np.linspace(0.0, dur, max(1, int(round(dur / step_s))) + 1)
-    n, sigma = len(edges) - 1, window_s / 2.355 / step_s  # FWHM -> sigma, in steps
-    half = int(3 * sigma)
-    kernel = np.exp(-0.5 * (np.arange(-half, half + 1) / sigma) ** 2)
-    smooth = lambda c: np.convolve(c, kernel)[half:half + n]   # centred, any kernel length
+    n = len(edges) - 1
+    kernel = np.ones(max(1, int(round(window_s / step_s))))
+    if smooth_s > 0:
+        half = int(3 * smooth_s / step_s)
+        kernel = np.convolve(kernel, np.exp(-0.5 * (np.arange(-half, half + 1) * step_s / smooth_s) ** 2))
+    lead = (len(kernel) - 1) // 2
+    smooth = lambda c: np.convolve(c, kernel)[lead:lead + n]   # centred, any kernel length
     width = smooth(np.diff(edges))
     per_unit = np.array([smooth(np.histogram(t, bins=edges)[0]) / width
                          for t in times] or np.zeros((0, n)))
-    logger.info("%s: moving-average window %.0f s", data.name, window_s)
+    logger.info("%s: %.0f s sliding window, %.0f s Gaussian smoothing", data.name, window_s, smooth_s)
     return (edges[:-1] + edges[1:]) / 2, per_unit, window_s
 
 
