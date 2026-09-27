@@ -26,6 +26,7 @@ GREY_L = "#dcdcdc"
 RED_L = "#f1a3a3"   # electrodes of units active only in other recordings of the slice
 GREY_M = "#cfcfcf"
 BG     = "#f0f0f0"
+CONDITIONS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]   # one per recording, in order
 
 def apply_style() -> None:
 
@@ -380,6 +381,72 @@ def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
         f"rate ≥ {params.min_rate_hz:g} Hz",
         ha="center", fontsize=7, color="#555555",
     )
+    return fig
+
+
+def comparison(recs: list[dict], locations, channel_ids, window_s, band="range", name="") -> Figure:
+    """One slice, all recordings: A electrodes per recording, B mean rates overlaid, C rate per unit.
+
+    recs: one dict per recording, in order, with label, unit_chans, t, per_unit and
+    rates ({unit id: Hz}). Units missing from a recording (left out as noise) get an ×.
+    """
+    words = [r["label"].split() for r in recs]
+    n = next((i for i, w in enumerate(zip(*words)) if len(set(w)) > 1), 0)
+    labels = [" ".join(w[n:]) or r["label"] for w, r in zip(words, recs)]
+    colors = CONDITIONS[:len(recs)]
+    pos = {c: i for i, c in enumerate(channel_ids)}
+
+    fig = plt.figure(figsize=(15, 9))
+    gs = GridSpec(2, 2, figure=fig, width_ratios=[1, 2.2], wspace=0.22, hspace=0.35)
+    fig.suptitle(name, fontsize=12, y=0.99)
+
+    axA = fig.add_subplot(gs[:, 0])
+    axA.scatter(locations[:, 0], locations[:, 1], s=5, c=GREY_L, edgecolors="none")
+    for k, (r, c, lab) in enumerate(zip(recs, colors, labels)):   # later recordings smaller, on top
+        idx = sorted({pos[ch] for chs in r["unit_chans"].values() for ch in chs if ch in pos})
+        axA.scatter(locations[idx, 0], locations[idx, 1], s=40 / (k + 1) ** 1.2, c=c,
+                    edgecolors="white", linewidths=0.4, label=lab)
+    axA.set_aspect("equal"); axA.invert_yaxis()
+    axA.set_xlabel("x position (µm)"); axA.set_ylabel("y position (µm)")
+    axA.legend(loc="lower right", fontsize=8, title="Electrodes > 3× noise", title_fontsize=8)
+    axA.set_title("A", loc="left")
+
+    axB = fig.add_subplot(gs[0, 1])
+    for r, c, lab in zip(recs, colors, labels):
+        pu = r["per_unit"]
+        if not len(pu):
+            continue
+        mean = pu.mean(axis=0)
+        if band != "none":
+            sem = pu.std(axis=0) / np.sqrt(len(pu))
+            lo, hi = {"range": (pu.min(axis=0), pu.max(axis=0)),
+                      "iqr": tuple(np.percentile(pu, [25, 75], axis=0)),
+                      "sem": (mean - sem, mean + sem)}[band]
+            axB.fill_between(r["t"], lo, hi, color=c, alpha=0.12, linewidth=0)
+        axB.plot(r["t"], mean, color=c, lw=1.6, label=f"{lab} ({len(pu)} units)")
+    band_txt = {"range": ", shaded min–max", "iqr": ", shaded IQR", "sem": ", shaded ± SEM"}.get(band, "")
+    axB.text(0.5, 1.02, f"mean across units, {window_s:.0f} s sliding window{band_txt}",
+             transform=axB.transAxes, ha="center", fontsize=8)
+    axB.set_xlim(0, max(r["t"][-1] for r in recs)); axB.set_ylim(0, None)
+    axB.set_xlabel("Time (s)"); axB.set_ylabel("Mean firing rate per unit (Hz)")
+    axB.legend(loc="upper right"); axB.set_title("B", loc="left")
+
+    axC = fig.add_subplot(gs[1, 1])
+    units = sorted(set().union(*(r["rates"] for r in recs)))
+    w = 0.8 / len(recs)
+    for k, (r, c, lab) in enumerate(zip(recs, colors, labels)):
+        x = np.arange(len(units)) + (k - (len(recs) - 1) / 2) * w
+        have = np.array([u in r["rates"] for u in units], bool)
+        axC.bar(x[have], [r["rates"][u] for u, h in zip(units, have) if h], width=w * 0.9,
+                color=c, label=lab)
+        axC.scatter(x[~have], np.zeros((~have).sum()), marker="x", s=30, color=c, zorder=3)
+    axC.set_xticks(range(len(units)), [str(u) for u in units])
+    axC.set_yscale("symlog", linthresh=0.1)
+    axC.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+    axC.set_xlabel("Unit"); axC.set_ylabel("Firing rate (Hz)")
+    axC.text(0.5, 1.02, "whole-recording rate per unit, × = left out of that recording as noise",
+             transform=axC.transAxes, ha="center", fontsize=8)
+    axC.legend(loc="upper right", fontsize=8); axC.set_title("C", loc="left")
     return fig
 
 

@@ -56,6 +56,24 @@ def figures(data, params, project, silent_chans=(), band="range"):
         plt.close(fig)
 
 
+def comparison(parts, slice_name, params, project, band="range"):
+    """All recordings of a slice in one figure, rates on a shared window."""
+    window_s = max(metrics.rate_over_time(d)[2] for d in parts)
+    recs = []
+    for d in parts:
+        t, per_unit, _ = metrics.rate_over_time(d, window_s=window_s)
+        dur = d.recording.get_total_duration()
+        recs.append(dict(label=d.tag or d.name, unit_chans=metrics.unit_channels(d), t=t,
+                         per_unit=per_unit, rates={u: len(s) / dur for u, s in
+                                                   zip(d.sorting.unit_ids, metrics.unit_spike_times(d))}))
+    fig = plots.comparison(recs, parts[0].locations, parts[0].recording.channel_ids,
+                           window_s, band, slice_name)
+    figdir = result_dir(project, slice_name) / "figures"
+    figdir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(figdir / f"{slice_name}_{params.sorter}_comparison.png")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     freeze_support()
     _configure_logging()
@@ -87,3 +105,4 @@ if __name__ == "__main__":
             seen = [{c for cs in metrics.unit_channels(d).values() for c in cs} for d in parts]
             for data, here in zip(parts, seen):
                 figures(data, params, project, set().union(*seen) - here, band="range")
+            comparison(parts, slice_name, params, project, band="range")

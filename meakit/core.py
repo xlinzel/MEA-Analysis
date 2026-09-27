@@ -462,19 +462,35 @@ def curate(data: Data, params: Params, project: Project, force: bool = False) ->
 def concatenate(datas: list[Data], name: str) -> Data:
     """Join preprocessed recordings of one slice end to end so they are sorted as one.
 
-    Only electrodes present in every recording are kept. After sort/analyze/compute/merge
-    on the result, split() cuts it back into the original recordings with shared unit ids.
+    Recordings are matched by electrode, not channel: a MaxWell channel id is a readout
+    channel that each configuration can route to a different electrode. Only electrodes
+    present in every recording are kept, and channels are renamed to their electrode id
+    so all parts share ids. After sort/analyze/compute/merge on the result, split() cuts
+    it back into the original recordings with shared unit ids.
     """
-    common = [c for c in datas[0].recording.channel_ids
-              if all(c in d.recording.channel_ids for d in datas[1:])]
-    parts = tuple(replace(d, recording=d.recording.select_channels(common), peaks=None,
-                          locations=d.recording.select_channels(common).get_channel_locations())
-                  for d in datas)
+    def electrodes(rec):   # electrode id per channel; position when the file has none
+        e = rec.get_property("electrode")
+        return ([str(x) for x in e] if e is not None else
+                [f"{x:g}_{y:g}" for x, y in rec.get_channel_locations()])
+
+    ids = [dict(zip(electrodes(d.recording), d.recording.channel_ids)) for d in datas]
+    common = [e for e in ids[0] if all(e in m for m in ids[1:])]
+    if not common:
+        raise ValueError(f"{name}: {[d.name for d in datas]} share no electrodes "
+                         "(different configurations), so they cannot be sorted together")
+    smallest = min(d.recording.get_num_channels() for d in datas)
+    if len(common) < 0.5 * smallest:
+        logger.warning("%s: only %d of %d electrodes are shared", name, len(common), smallest)
+
+    parts = []
+    for d, m in zip(datas, ids):
+        rec = d.recording.select_channels([m[e] for e in common]).rename_channels(common)
+        parts.append(replace(d, recording=rec, locations=rec.get_channel_locations(), peaks=None))
     rec = si.concatenate_recordings([p.recording for p in parts])
-    logger.info("%s: %s concatenated, %d common channels, %.0f s",
+    logger.info("%s: %s concatenated, %d shared electrodes, %.0f s",
                 name, [d.name for d in datas], len(common), rec.get_total_duration())
     return replace(parts[0], name=name, tag=" + ".join(d.tag or d.name for d in datas),
-                   recording=rec, parts=parts)
+                   recording=rec, parts=tuple(parts))
 
 
 def split(data: Data, params: Params, project: Project, force: bool = True) -> list[Data]:
