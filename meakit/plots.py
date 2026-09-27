@@ -23,6 +23,7 @@ PURPLE = "#6a3d9a"
 BLUE   = "#20548a"
 RED    = "#c03030"
 GREY_L = "#dcdcdc"
+RED_L = "#f1a3a3"   # electrodes of units active only in other recordings of the slice
 GREY_M = "#cfcfcf"
 BG     = "#f0f0f0"
 
@@ -86,8 +87,12 @@ def apply_style() -> None:
 
 def unit_map(units: pd.DataFrame, locations: np.ndarray, channel_ids,
              unit_chans: dict, params: Params, name: str = "",
-             ax=None) -> Figure:
-    """Electrodes in grey; those belonging to a unit in purple, unit centres black."""
+             ax=None, silent_chans=()) -> Figure:
+    """Electrodes in grey; those belonging to a unit in purple, unit centres black.
+
+    silent_chans: electrodes of units seen in other recordings of the slice but not
+    this one, drawn light red.
+    """
     standalone = ax is None
     if standalone:
         _, ax = plt.subplots(figsize=(11, 10))
@@ -101,8 +106,13 @@ def unit_map(units: pd.DataFrame, locations: np.ndarray, channel_ids,
 
     used = {pos[c] for chans in unit_chans.values() for c in chans if c in pos}
     used = sorted(used)
+    silent = sorted({pos[c] for c in silent_chans if c in pos} - set(used))
+    ax.scatter(locations[silent, 0], locations[silent, 1],
+               s=18, c=RED_L, edgecolors="none", zorder=2, label="Active in other recordings")
     ax.scatter(locations[used, 0], locations[used, 1],
-               s=18, c=PURPLE, edgecolors="none", zorder=2)
+               s=18, c=PURPLE, edgecolors="none", zorder=2, label="Active here (> 3× noise)")
+    if silent:
+        ax.legend(loc="lower right", fontsize=7, markerscale=1.2, handletextpad=0.2)
 
     ax.scatter(units["x_um"], units["y_um"],
                s=12, c="k", edgecolors="none", zorder=3)
@@ -306,7 +316,8 @@ def waveforms(templates, unit_ids, units: pd.DataFrame, fs: float,
 
 def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
             params, name="", tag="", n_unit=None,
-            t=None, per_unit=None, window_s=None, band: str = "range") -> Figure:
+            t=None, per_unit=None, window_s=None, band: str = "range",
+            silent_chans=()) -> Figure:
     """A: unit map, B: traces (+ zoom), C: mean firing rate across units over time.
 
     band: spread shown around the mean in C: "range" (min-max across units),
@@ -320,7 +331,7 @@ def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
         fig.suptitle(tag, fontsize=12, y=0.99)
 
     axA = fig.add_subplot(gs[0, 0])
-    unit_map(units, locations, channel_ids, unit_chans, params, ax=axA)
+    unit_map(units, locations, channel_ids, unit_chans, params, ax=axA, silent_chans=silent_chans)
     axA.set_title("A", loc="left")
     axA.text(0.5, 1.02, f"{len(units)} units, purple = electrodes > 3× noise, black = centres",
              transform=axA.transAxes, ha="center", fontsize=8)

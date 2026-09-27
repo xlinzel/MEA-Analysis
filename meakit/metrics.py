@@ -82,6 +82,9 @@ def unit_channels(data: Data, k: float = 3.0) -> dict:
     noise = an.get_extension("noise_levels").get_data()
     out = {}
     for uid, a in zip(an.unit_ids, amp):
+        if not np.nanmax(a, initial=0) > 0:   # no spikes in this recording
+            out[uid] = []
+            continue
         idx = np.flatnonzero(a > k * noise)
         idx = idx[np.argsort(-a[idx])] if len(idx) else [a.argmax()]
         out[uid] = list(an.channel_ids[idx])
