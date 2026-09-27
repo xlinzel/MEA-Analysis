@@ -58,7 +58,7 @@ def unit_stats(data: Data) -> pd.DataFrame:
     dur = data.recording.get_total_duration()
     trains = _to_spiketrains(data.sorting, dur)
     df["cv"] = [float(cv(isi(t))) for t in trains]
-    df["cv2"] = [float(cv2(isi(t))) for t in trains]
+    df["cv2"] = [float(cv2(isi(t), with_nan=True)) for t in trains]   # NaN for units silent here
 
     return df
 
