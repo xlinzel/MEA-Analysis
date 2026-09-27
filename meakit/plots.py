@@ -38,6 +38,7 @@ def apply_style() -> None:
         # saving (§19)
         "savefig.dpi": 300,
         "savefig.bbox": "tight",
+        "savefig.pad_inches": 0.25,
         "savefig.facecolor": "white",
 
         # font hierarchy (§14)
@@ -149,7 +150,7 @@ def traces(seg, fs, ax=None, offset_uv=120.0, lw=0.5, ms=False, n_unit=None):
         ax.plot([], [], color="k", lw=1.2, label="most active (no units)")
         ax.legend(loc="upper right", fontsize=7, frameon=False)
 
-    ax.set_xlim(0, t[-1])
+    ax.set_xlim(0, t[-1] * 1.03)          # right-hand padding so the traces aren't clipped
     ax.axis("off")
 
     span = t[-1]
@@ -304,12 +305,15 @@ def waveforms(templates, unit_ids, units: pd.DataFrame, fs: float,
 
 
 def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
-            params, name="", tag="", n_unit=None) -> Figure:
-    fig = plt.figure(figsize=(15, 5))
-    gs = GridSpec(1, 3, figure=fig, width_ratios=[1, 1.5, 0.8], wspace=0.28)
+            params, name="", tag="", n_unit=None,
+            t=None, per_unit=None, window_s=None) -> Figure:
+    """A: unit map, B: traces (+ zoom), C: mean firing rate across units over time."""
+    fig = plt.figure(figsize=(15, 8.5))
+    gs = GridSpec(2, 3, figure=fig, width_ratios=[1, 1.5, 0.8], height_ratios=[1.3, 0.7],
+                  wspace=0.28, hspace=0.35)
 
     if tag:
-        fig.suptitle(tag, fontsize=12, y=1.0)
+        fig.suptitle(tag, fontsize=12, y=0.99)
 
     axA = fig.add_subplot(gs[0, 0])
     unit_map(units, locations, channel_ids, unit_chans, params, ax=axA)
@@ -328,8 +332,22 @@ def summary(units, locations, channel_ids, unit_chans, seg, zseg, fs,
     axZ.text(0.5, 1.02, f"zoom: {zseg.shape[0]/fs*1000:.0f} ms",
              transform=axZ.transAxes, ha="center", fontsize=8)
 
+    axC = fig.add_subplot(gs[1, :])
+    axC.set_title("C", loc="left")
+    if per_unit is not None and len(per_unit):
+        axC.plot(t, per_unit.mean(axis=0), color=PURPLE, lw=1.4)
+        axC.set_xlim(0, t[-1] + (t[1] - t[0]) / 2 if len(t) > 1 else t[-1])
+        axC.set_ylim(0, None)
+        axC.text(0.5, 1.02, f"mean of {len(per_unit)} units, {window_s:.0f} s sliding window",
+                 transform=axC.transAxes, ha="center", fontsize=8)
+    else:
+        axC.text(0.5, 0.5, "no units", transform=axC.transAxes, ha="center", va="center",
+                 fontsize=9, color="#555555")
+    axC.set_xlabel("Time (s)")
+    axC.set_ylabel("Mean firing rate per unit (Hz)")
+
     fig.text(
-        0.5, -0.02,
+        0.5, 0.01,
         f"{name}  ·  {params.sorter}  ·  "
         f"{params.freq_min:.0f}–{params.freq_max:.0f} Hz band-pass  ·  "
         f"{params.common_reference} reference  ·  "

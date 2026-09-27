@@ -56,7 +56,8 @@ if __name__ == "__main__":
             templates = data.analyzer.get_extension("templates").get_data()
             figs = {
                 "summary": plots.summary(units, data.locations, data.recording.channel_ids,
-                                         chans, seg, zseg, fs, params, data.name, data.tag, n_unit),
+                                         chans, seg, zseg, fs, params, data.name, data.tag, n_unit,
+                                         t_mid, per_unit, bin_s),
                 "rates": plots.rates(t_mid, per_unit, bin_s, metrics.unit_spike_times(data),
                                      data.recording.get_total_duration(), data.name),
                 "waveforms": plots.waveforms(templates, list(data.sorting.unit_ids), units, fs),
