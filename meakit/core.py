@@ -89,7 +89,7 @@ class Params:
     # curation
     min_snr: float = 5.0
     max_amp_cutoff: float = 0.1
-    min_presence: float = 0.9
+    min_presence: float = 0.5   # slice activity runs down / TTX washes in over minutes
     min_spikes: int = 50
     fast_rate_hz: float = 2.0
     max_rp_contamination: float = 0.2
