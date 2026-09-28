@@ -86,6 +86,7 @@ class Params:
     exclude_channels: tuple = ()
     merge_min_spikes: int = 30
     duplicate_fraction: float = 0.5   # shared spikes (±0.4 ms) that mark a duplicate
+    min_spike_snr: float = 2.0   # spikes below this x noise on the unit's peak electrode are template fits to noise
     # curation
     min_snr: float = 4.5
     max_amp_cutoff: float = 0.1
@@ -399,11 +400,23 @@ def merge(data: Data, params: Params, project: Project, force: bool = False) -> 
 
     def mb():
         an = data.analyzer
+        # template matching also fits templates onto noise: drop spikes with no signal
+        # on the unit's own peak electrode (SI amplitudes and noise levels)
+        amps = an.get_extension("spike_amplitudes").get_data(outputs="by_unit", concatenated=True)
+        noise = dict(zip(an.channel_ids, an.get_extension("noise_levels").get_data()))
+        peak = si.get_template_extremum_channel(an, peak_sign="both")
+        trains = {u: an.sorting.get_unit_spike_train(u)[np.abs(amps[u]) >= params.min_spike_snr * noise[peak[u]]]
+                  for u in an.unit_ids}
+        logger.info("%s: dropped %d of %d spikes below %g x noise", data.name,
+                    an.sorting.to_spike_vector().size - sum(map(len, trains.values())),
+                    an.sorting.to_spike_vector().size, params.min_spike_snr)
+        sorting = si.NumpySorting.from_unit_dict(trains, an.sampling_frequency)
+
         # peak_shift returns (peak - nbefore) but align_sorting subtracts its shift,
         # so the sign must be flipped or misaligned units move further apart (SI 0.104)
         shifts = {u: -s for u, s in
                   si.get_template_extremum_channel_peak_shift(an, peak_sign="both").items()}
-        sorting = si.remove_excess_spikes(si.align_sorting(an.sorting, shifts), data.recording)
+        sorting = si.remove_excess_spikes(si.align_sorting(sorting, shifts), data.recording)
 
         # templates and metrics must be rebuilt on the aligned spike trains
         an = _build_analyzer(sorting, data.recording, params, Path(f"{base}_dedup"))
