@@ -8,13 +8,15 @@ import matplotlib.pyplot as plt
 
 from meakit.core import (
     Params, Project, configure_runtime, _configure_logging,
-    load, preprocess, sort, analyze, compute, merge, concatenate, split,
+    load, preprocess, detect, sort, analyze, compute, merge, concatenate, split,
     curate_together, result_dir
 )
 from meakit import metrics
 from meakit import plots
 
 
+
+MAKE_VIDEOS = False   # electrode timelapse per recording (~10 min each to render)
 
 # recordings of one slice are sorted together so units keep their id across conditions;
 # they must share electrodes (concatenate raises if they don't)
@@ -75,6 +77,19 @@ def comparison(parts, slice_name, params, project, band="sem"):
     plt.close(fig)
 
 
+def video(raw, part, params, project):
+    """Electrode timelapse of one recording; raw carries the pipeline's detect() peaks."""
+    ids = list(part.analyzer.channel_ids)
+    on = [ids.index(c) for cs in metrics.unit_channels(part).values() for c in cs]
+    rec = raw.recording
+    figdir = result_dir(project, raw.name) / "figures"
+    figdir.mkdir(parents=True, exist_ok=True)
+    stem = f"{raw.tag.replace(' ', '_') if raw.tag else raw.name}_electrodes.mp4"
+    plots.electrode_video(raw.peaks, raw.locations, part.analyzer.get_channel_locations()[on],
+                          rec.get_sampling_frequency(), rec.get_total_duration(),
+                          figdir / stem, raw.tag or raw.name, params.detect_mad)
+
+
 if __name__ == "__main__":
     freeze_support()
     _configure_logging()
@@ -101,6 +116,10 @@ if __name__ == "__main__":
 
             parts = split(joint, params, project, force=True)
             parts = curate_together(parts, params, project, force=True)
+
+            if MAKE_VIDEOS:
+                for raw, part in zip(datas, parts):
+                    video(detect(raw, params, project, save=True, force=False), part, params, project)
 
             # electrodes seen in each recording, so a map can show those gone silent
             seen = [{c for cs in metrics.unit_channels(d).values() for c in cs} for d in parts]

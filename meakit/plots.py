@@ -451,6 +451,66 @@ def comparison(recs: list[dict], locations, channel_ids, window_s, band="sem", n
     return fig
 
 
+def electrode_video(peaks, locations, unit_locations, fs, duration, path, title="",
+                    threshold=5.0, bin_s=0.1, fps=30, decay=0.6) -> None:
+    """MP4 of threshold crossings per electrode over time (bin_s per frame).
+
+    Each electrode flashes when it crosses threshold and fades by `decay` per frame;
+    kept-unit electrodes (unit_locations) are ringed, so spiking outside units stands out.
+    """
+    import matplotlib.animation as anim
+    import imageio_ffmpeg
+    plt.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
+
+    nb = int(np.ceil(duration / bin_s))
+    frame = (peaks["sample_index"] / fs / bin_s).astype(int).clip(0, nb - 1)
+    counts = np.zeros((nb, len(locations)), np.float32)
+    np.add.at(counts, (frame, peaks["channel_index"]), 1)
+    ring = {tuple(l) for l in np.round(unit_locations, 1)}
+    in_unit = np.array([tuple(l) in ring for l in np.round(locations, 1)], bool)
+    t = np.arange(nb) * bin_s
+
+    fig = plt.figure(figsize=(10, 9))
+    gs = GridSpec(2, 1, figure=fig, height_ratios=[4, 1], hspace=0.25)
+    ax, axp = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
+    ax.scatter(locations[:, 0], locations[:, 1], s=6, c=GREY_M, edgecolors="none", zorder=1)
+    ax.scatter(locations[in_unit, 0], locations[in_unit, 1], s=60, facecolors="none",
+               edgecolors="#e0662a", lw=1.0, zorder=2, label="Kept-unit electrodes")
+    flash = ax.scatter(locations[:, 0], locations[:, 1], s=np.zeros(len(locations)),
+                       c=np.zeros(len(locations)), cmap="Purples", vmin=0, vmax=1.5,
+                       edgecolors="none", zorder=3)
+    ax.set_aspect("equal"); ax.invert_yaxis()
+    ax.set_xlabel("x position (µm)"); ax.set_ylabel("y position (µm)")
+    if in_unit.any():
+        ax.legend(loc="lower right", fontsize=8)
+    head = ax.set_title("", loc="left", fontsize=10)
+
+    axp.plot(t, counts[:, ~in_unit].sum(1) / bin_s, c=PURPLE, lw=0.6, label="Other electrodes")
+    if in_unit.any():
+        axp.plot(t, counts[:, in_unit].sum(1) / bin_s, c="#e0662a", lw=0.6, label="Kept-unit electrodes")
+    axp.set_xlim(0, duration); axp.set_ylim(0, None)
+    axp.set_xlabel("Time (s)"); axp.set_ylabel("Spikes/s (all electrodes)")
+    axp.legend(loc="upper right", fontsize=7, frameon=False)
+    cursor = axp.axvline(0, c="k", lw=1)
+
+    state = np.zeros(len(locations), np.float32)
+
+    def update(i):
+        nonlocal state
+        state = state * decay + counts[i]
+        flash.set_sizes(np.where(state > 0.05, 15 + 45 * np.minimum(state, 2), 0))
+        flash.set_array(state)
+        head.set_text(f"{title}  |  t = {t[i]:6.1f} s  |  {int(counts[i].sum())} spikes this "
+                      f"{bin_s * 1000:.0f} ms  (≥ {threshold:g}× noise, per electrode)")
+        cursor.set_xdata([t[i], t[i]])
+        return flash, head, cursor
+
+    anim.FuncAnimation(fig, update, frames=nb).save(
+        path, writer=anim.FFMpegWriter(fps=fps, bitrate=1800), dpi=90)
+    plt.close(fig)
+    logger.info("Saved electrode video %s (%d frames)", path, nb)
+
+
 # private helper functions
 
 def _scale_bar(ax, x, y, dx, dy, xlabel, ylabel, color="k") -> None:
