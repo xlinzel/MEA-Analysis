@@ -104,6 +104,9 @@ if __name__ == "__main__":
 
             # electrodes seen in each recording, so a map can show those gone silent
             seen = [{c for cs in metrics.unit_channels(d).values() for c in cs} for d in parts]
+            if not any(d.analyzer.get_num_units() for d in parts):
+                print(f"{slice_name}: no units passed curation in any recording, no figures")
+                continue
             for data, here in zip(parts, seen):
                 figures(data, params, project, set().union(*seen) - here, band="range")
             comparison(parts, slice_name, params, project, band="sem")

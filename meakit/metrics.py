@@ -161,6 +161,10 @@ def trace_segment(data: Data, units: pd.DataFrame, n_channels: int = 8,
                     break
                 if all_ids[i] not in channel_ids:
                     channel_ids.append(all_ids[i])
+        if not channel_ids:   # no units and no peaks: show the first electrodes
+            channel_ids = all_ids[:n_channels]
+        if not channel_ids:   # no units and no peaks: show the first electrodes
+            channel_ids = all_ids[:n_channels]
     else:
         n_unit = len(channel_ids)
 
