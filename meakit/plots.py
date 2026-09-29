@@ -487,7 +487,7 @@ def electrode_video(peaks, locations, unit_locations, fs, duration, path, title=
 
     axp.plot(t, counts[:, ~in_unit].sum(1) / bin_s, c=PURPLE, lw=0.6, label="Other electrodes")
     if in_unit.any():
-        axp.plot(t, counts[:, in_unit].sum(1) / bin_s, c="#e0662a", lw=0.6, label="Kept-unit electrodes")
+        axp.plot(t, counts[:, in_unit].sum(1) / bin_s, c="#e0662a", lw=0.6,  alpha=0.5, label="Kept-unit electrodes")
     axp.set_xlim(0, duration); axp.set_ylim(0, None)
     axp.set_xlabel("Time (s)"); axp.set_ylabel("Spikes/s (all electrodes)")
     axp.legend(loc="upper right", fontsize=7, frameon=False)

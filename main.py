@@ -21,9 +21,10 @@ MAKE_VIDEOS = False   # electrode timelapse per recording (~10 min each to rende
 # recordings of one slice are sorted together so units keep their id across conditions;
 # they must share electrodes (concatenate raises if they don't)
 SLICES = {
-    # "Lumbar_S2": ("000005", "000007", "000008"),   # Baseline and E2/TTX share no electrodes
-    "Thoracic_S3": ("000012", "000013", "000014"),
-    "Lumbar_S1": ("000015", "000018", "000019"),
+    #"MMarm_Lumbar_S1": ("000002", "000003", "000004"),
+    "FMarm_SNI_S1": ("000004", "000008", "000011", "000012"),
+    #"Thoracic_S3": ("000012", "000013", "000014"),
+    #"Lumbar_S1": ("000015", "000018", "000019"),
 }
 
 
@@ -97,7 +98,8 @@ if __name__ == "__main__":
     project = Project(Path("tests/project"))
     # per-sorter settings live in core.SORTER_DEFAULTS; override with Params(sorter_params=...)
     # SC2 is the validated choice; "herdingspikes" and "kilosort4" (GPU) also run
-    params_dict = tuple(Params(sorter=s) for s in ("spykingcircus2",))
+    params_dict = tuple(Params(sorter=s, sorter_params={"job_kwargs": {"chunk_duration": "100ms"}})
+                    for s in ("spykingcircus2",))
 
     configure_runtime()
 
@@ -106,16 +108,16 @@ if __name__ == "__main__":
             datas = []
             for name in names:
                 data = load(Path(f"tests/project/data/{name}/data.raw.h5"))
-                datas.append(preprocess(data, params, project, save=True, force=True))
+                datas.append(preprocess(data, params, project, save=True, force=False))
 
             joint = concatenate(datas, slice_name)
-            joint = sort(joint, params, project, force=True)
-            joint = analyze(joint, params, project, force=True)
-            joint = compute(joint, params)
-            joint = merge(joint, params, project, force=True)
+            joint = sort(joint, params, project, force=False)
+            joint = analyze(joint, params, project, force=False)
+            joint = compute(joint, params, force=False)
+            joint = merge(joint, params, project, force=False)
 
-            parts = split(joint, params, project, force=True)
-            parts = curate_together(parts, params, project, force=True)
+            parts = split(joint, params, project, force=False)
+            parts = curate_together(parts, params, project, force=False)
 
             if MAKE_VIDEOS:
                 for raw, part in zip(datas, parts):
@@ -127,5 +129,5 @@ if __name__ == "__main__":
                 print(f"{slice_name}: no units passed curation in any recording, no figures")
                 continue
             for data, here in zip(parts, seen):
-                figures(data, params, project, set().union(*seen) - here, band="range")
+                figures(data, params, project, set().union(*seen) - here, band="sem")
             comparison(parts, slice_name, params, project, band="sem")
