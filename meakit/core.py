@@ -71,7 +71,9 @@ DEFAULT_EXTENSIONS = {
 # sorter settings for an already filtered + referenced 2D HD-MEA recording
 SORTER_DEFAULTS = {
     "herdingspikes": {"common_reference": "none"},
-    "spykingcircus2": {"apply_preprocessing": False},   # keeps its whitening
+    # keeps its whitening; short chunks bound circus-omp memory, which grows with
+    # (spikes per chunk)^2 and ran out at 30 GB on busy 1 s chunks
+    "spykingcircus2": {"apply_preprocessing": False, "job_kwargs": {"chunk_duration": "100ms"}},
     "kilosort4": {"do_CAR": False, "do_correction": False},  # no 1D probe drift in a slice
 }
 
