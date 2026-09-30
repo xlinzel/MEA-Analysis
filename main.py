@@ -18,14 +18,21 @@ from meakit import plots
 
 
 MAKE_VIDEOS = False   # electrode timelapse per recording (~10 min each to render)
+RATE_WINDOW_S = 40.0  # sliding window for firing-rate plots (s); None picks one automatically
 
-# recordings of one slice are sorted together so units keep their id across conditions;
-# they must share electrodes (concatenate raises if they don't)
-SLICES = {
-    #"MMarm_Lumbar_S1": ("000002", "000003", "000004"),
-    "FMarm_SNI_S1": ("000004", "000008", "000011", "000012"),
-    #"Thoracic_S3": ("000012", "000013", "000014"),
-    #"Lumbar_S1": ("000015", "000018", "000019"),
+# project folder -> its slices. Recordings live in <project>/data/<id>/data.raw.h5 and
+# results go to <project>/results/. Recordings of one slice are sorted together so units
+# keep their id across conditions; they must share electrodes (concatenate raises if not)
+PROJECTS = {
+    "tests/project": {
+        #"MMarm_Lumbar_S1": ("000002", "000003", "000004"),
+        "FMarm_SNI_S1": ("000004", "000008", "000011", "000012"),
+        #"Thoracic_S3": ("000012", "000013", "000014"),
+        #"Lumbar_S1": ("000015", "000018", "000019"),
+    },
+    # "D:/MEA/2026-09-12_MSDR_Thoracic": {
+    #     "Thoracic_S3": ("000012", "000013", "000014"),
+    # },
 }
 
 
@@ -44,7 +51,7 @@ def figures(data, params, project, silent_chans=(), band="range"):
     figdir.mkdir(parents=True, exist_ok=True)
     stem = f"{data.tag.replace(' ', '_') if data.tag else data.name}_{params.sorter}"
 
-    t_mid, per_unit, bin_s = metrics.rate_over_time(data)
+    t_mid, per_unit, bin_s = metrics.rate_over_time(data, window_s=RATE_WINDOW_S)
     templates = data.analyzer.get_extension("templates").get_data()
     figs = {
         "summary": plots.summary(units, data.locations, data.recording.channel_ids,
@@ -63,7 +70,7 @@ def figures(data, params, project, silent_chans=(), band="range"):
 
 def comparison(parts, slice_name, params, project, band="sem"):
     """All recordings of a slice in one figure, rates on a shared window."""
-    window_s = max(metrics.rate_over_time(d)[2] for d in parts)
+    window_s = RATE_WINDOW_S or max(metrics.rate_over_time(d)[2] for d in parts)
     recs = []
     for d in parts:
         t, per_unit, _ = metrics.rate_over_time(d, window_s=window_s)
@@ -94,11 +101,40 @@ def video(raw, part, params, project):
                           figdir / stem, raw.tag or raw.name, params.detect_mad)
 
 
+def run_slice(project, slice_name, names, params):
+    """Sort one slice's recordings together, curate jointly and draw its figures."""
+    datas = []
+    for name in names:
+        data = load(project.dir / "data" / name / "data.raw.h5")
+        datas.append(preprocess(data, params, project, save=True, force=False))
+
+    joint = concatenate(datas, slice_name)
+    joint = sort(joint, params, project, force=False)
+    joint = analyze(joint, params, project, force=False)
+    joint = compute(joint, params, force=False)
+    joint = merge(joint, params, project, force=False)
+
+    parts = split(joint, params, project, force=False)
+    parts = curate_together(parts, params, project, force=False)
+
+    if MAKE_VIDEOS:
+        for raw, part in zip(datas, parts):
+            video(detect(raw, params, project, save=True, force=False), part, params, project)
+
+    # electrodes seen in each recording, so a map can show those gone silent
+    seen = [{c for cs in metrics.unit_channels(d).values() for c in cs} for d in parts]
+    if not any(d.analyzer.get_num_units() for d in parts):
+        print(f"{slice_name}: no units passed curation in any recording, no figures")
+        return
+    for data, here in zip(parts, seen):
+        figures(data, params, project, set().union(*seen) - here, band="sem")
+    comparison(parts, slice_name, params, project, band="sem")
+
+
 if __name__ == "__main__":
     freeze_support()
     _configure_logging()
 
-    project = Project(Path("tests/project"))
     # per-sorter settings live in core.SORTER_DEFAULTS; override with Params(sorter_params=...)
     # SC2 is the validated choice; "herdingspikes" and "kilosort4" (GPU) also run
     params_dict = tuple(Params(sorter=s, sorter_params={"job_kwargs": {"chunk_duration": "100ms"}})
@@ -107,30 +143,6 @@ if __name__ == "__main__":
     configure_runtime()
 
     for params in params_dict:
-        for slice_name, names in SLICES.items():
-            datas = []
-            for name in names:
-                data = load(Path(f"tests/project/data/{name}/data.raw.h5"))
-                datas.append(preprocess(data, params, project, save=True, force=False))
-
-            joint = concatenate(datas, slice_name)
-            joint = sort(joint, params, project, force=False)
-            joint = analyze(joint, params, project, force=False)
-            joint = compute(joint, params, force=False)
-            joint = merge(joint, params, project, force=False)
-
-            parts = split(joint, params, project, force=False)
-            parts = curate_together(parts, params, project, force=False)
-
-            if MAKE_VIDEOS:
-                for raw, part in zip(datas, parts):
-                    video(detect(raw, params, project, save=True, force=False), part, params, project)
-
-            # electrodes seen in each recording, so a map can show those gone silent
-            seen = [{c for cs in metrics.unit_channels(d).values() for c in cs} for d in parts]
-            if not any(d.analyzer.get_num_units() for d in parts):
-                print(f"{slice_name}: no units passed curation in any recording, no figures")
-                continue
-            for data, here in zip(parts, seen):
-                figures(data, params, project, set().union(*seen) - here, band="sem")
-            comparison(parts, slice_name, params, project, band="sem")
+        for project_dir, slices in PROJECTS.items():
+            for slice_name, names in slices.items():
+                run_slice(Project(Path(project_dir)), slice_name, names, params)

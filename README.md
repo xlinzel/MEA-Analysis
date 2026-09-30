@@ -18,21 +18,28 @@ pip install -e .                  # add [kilosort] for Kilosort 4 (needs a GPU)
 
 ## Data
 
-Put each recording in its own folder with MaxWell's metadata file next to it:
+One folder per project; each recording in its own folder with MaxWell's metadata file:
 
 ```
-tests/project/data/000012/data.raw.h5
-tests/project/data/000012/mxassay.metadata     # its "tag" is used to title figures
+<project>/data/000012/data.raw.h5
+<project>/data/000012/mxassay.metadata     # its "tag" is used to title figures
+<project>/results/                         # created by the pipeline
 ```
 
 ## Running `main.py`
 
 Edit the top of `main.py`, then run `python main.py`.
 
-**`SLICES`**: which recordings to sort together.
+**`PROJECTS`**: which project folders to run, and in each, which recordings to sort
+together as one slice. Every project and slice listed is run in turn.
 ```python
-SLICES = {
-    "Thoracic_S3": ("000012", "000013", "000014"),   # Baseline, E2, TTX, in order
+PROJECTS = {
+    "D:/MEA/2026-09-12_MSDR_Thoracic": {
+        "Thoracic_S3": ("000012", "000013", "000014"),   # Baseline, E2, TTX, in order
+    },
+    "D:/MEA/2026-09-04_MMarm_Lumbar": {
+        "Lumbar_S1": ("000002", "000003", "000004"),
+    },
 }
 ```
 - Only group recordings of the **same slice**. Recordings are matched by electrode
@@ -46,8 +53,11 @@ SLICES = {
 **`MAKE_VIDEOS`**: `True` makes an electrode timelapse video per recording
 (about 10 min each to render). Default `False`.
 
+**`RATE_WINDOW_S`**: sliding window for all firing-rate plots, in seconds (default 40).
+Shorter shows faster changes but is noisier; `None` picks a window from the firing rates.
+
 **`force=`** on each stage: `True` redoes the stage, `False` reuses saved results from
-`tests/project/results/`. After changing a parameter, set `force=True` from that
+`<project>/results/`. After changing a parameter, set `force=True` from that
 stage onwards:
 
 | You changed | Redo from |
@@ -56,7 +66,7 @@ stage onwards:
 | sorter or `sorter_params` | `sort` |
 | `min_spike_snr`, `duplicate_fraction`, `merge_min_spikes` | `merge` |
 | curation thresholds (`min_snr`, `min_rate_hz`, …) | `curate_together` |
-| figure options (`band`, colours) | nothing: figures are always redrawn |
+| figure options (`band`, `RATE_WINDOW_S`, colours) | nothing: figures are always redrawn |
 
 **`band=`** in `figures(...)` and `comparison(...)`: shading around the mean firing
 rate: `"range"` (min–max), `"iqr"`, `"sem"` or `"none"`.
@@ -64,7 +74,7 @@ rate: `"range"` (min–max), `"iqr"`, `"sem"` or `"none"`.
 **Sorter**: `Params(sorter="spykingcircus2")` (default, validated). `"kilosort4"` and
 `"herdingspikes"` also run but are less tested.
 
-## Outputs (`tests/project/results/`)
+## Outputs (`<project>/results/`)
 
 | Where | What |
 |---|---|
@@ -114,5 +124,5 @@ Pass any of these, e.g. `Params(sorter="spykingcircus2", min_snr=5.0)`.
 | One cell appears as two units | lower `duplicate_fraction` (e.g. 0.3) |
 | Two cells merged into one | raise `duplicate_fraction` |
 | Cell active in only one condition is missing | lower SC2's own cutoff, which applies to the joined recording: `sorter_params={"min_firing_rate": 0.02}` |
-| Few shared electrodes / error joining recordings | recordings are from different slices or electrode configurations; split them in `SLICES` |
+| Few shared electrodes / error joining recordings | recordings are from different slices or electrode configurations; split them in `PROJECTS` |
 | A failed sort is found on the next run (`Failed to load cached sorting`) | harmless, it re-sorts; or delete `results/<slice>/sorted_<sorter>` |
