@@ -69,13 +69,14 @@ rate: `"range"` (min–max), `"iqr"`, `"sem"` or `"none"`.
 | Where | What |
 |---|---|
 | `<recording>/figures/` | summary (map, traces, mean rate), rates, waveforms, diagnostics; `_electrodes.mp4` if videos are on |
-| `<recording>/analyzer_<sorter>_curation.csv` | every unit's metrics; `keep` / `rejected_by` (this recording), `keep_joint` (kept for the slice), `in_recording` (included here) |
+| `<recording>/analyzer_<sorter>_curation.csv` | every unit's metrics; `keep` / `rejected_by` (this recording), `keep_joint` (kept for the slice), `zeroed_as_noise` (only noise here, counted as 0 Hz) |
 | `<recording>/units.parquet` | table behind the figures |
 | `<slice>/figures/<slice>_<sorter>_comparison.png` | all recordings of the slice: electrode map, mean rates overlaid, per-unit rates |
 
 **Curation rule:** a unit passing the rules in *any* recording is kept in *all* of them.
-Per recording it is counted as silent (≈ 0 Hz) if it barely fires there, and left out
-if its spikes there are only noise (fails footprint or refractory at a real rate).
+Every recording therefore averages over the same units. Where a unit's spikes in a
+recording are only noise (fails footprint or refractory at a real rate, e.g. a cell
+silenced by TTX), they are removed and it counts as 0 Hz (× in the comparison figure).
 
 ## Parameters (`Params(...)` in `main.py`)
 

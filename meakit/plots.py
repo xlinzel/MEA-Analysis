@@ -388,7 +388,8 @@ def comparison(recs: list[dict], locations, channel_ids, window_s, band="sem", n
     """One slice, all recordings: A electrodes per recording, B mean rates overlaid, C rate per unit.
 
     recs: one dict per recording, in order, with label, unit_chans, t, per_unit and
-    rates ({unit id: Hz}). Units missing from a recording (left out as noise) get an ×.
+    rates ({unit id: Hz}) and optionally zeroed (unit ids whose spikes there were noise,
+    counted as 0 Hz), marked with an ×.
     """
     words = [r["label"].split() for r in recs]
     n = next((i for i, w in enumerate(zip(*words)) if len(set(w)) > 1), 0)
@@ -440,12 +441,13 @@ def comparison(recs: list[dict], locations, channel_ids, window_s, band="sem", n
         have = np.array([u in r["rates"] for u in units], bool)
         axC.bar(x[have], [r["rates"][u] for u, h in zip(units, have) if h], width=w * 0.9,
                 color=c, label=lab)
-        axC.scatter(x[~have], np.zeros((~have).sum()), marker="x", s=30, color=c, zorder=3)
+        cross = ~have | np.isin(units, list(r.get("zeroed", ())))
+        axC.scatter(x[cross], np.zeros(cross.sum()), marker="x", s=30, color=c, zorder=3)
     axC.set_xticks(range(len(units)), [str(u) for u in units])
     axC.set_yscale("symlog", linthresh=0.1)
     axC.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     axC.set_xlabel("Unit"); axC.set_ylabel("Firing rate (Hz)")
-    axC.text(0.5, 1.02, "whole-recording rate per unit, × = left out of that recording as noise",
+    axC.text(0.5, 1.02, "whole-recording rate per unit, × = only noise in that recording, counted as 0 Hz",
              transform=axC.transAxes, ha="center", fontsize=8)
     axC.legend(loc="upper right", fontsize=8); axC.set_title("C", loc="left")
     return fig

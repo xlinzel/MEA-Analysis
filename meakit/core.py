@@ -519,11 +519,11 @@ def split(data: Data, params: Params, project: Project, force: bool = True) -> l
 def curate_together(parts: list[Data], params: Params, project: Project, force: bool = False) -> list[Data]:
     """Curate split recordings as one: a unit passing the rules in any recording is kept in all.
 
-    A cell near a cutoff then cannot appear in one condition and vanish in the next.
-    Per recording, a kept unit that fails there is still counted when its rate is below
-    min_rate_hz (a silenced cell, so means are not inflated) or it fails only SNR, presence
-    or amplitude cutoff (a weaker real cell). It is left out of that recording when it fails
-    footprint or refractory at a real rate: that is noise the template absorbed.
+    Every recording keeps the same units, so condition means average over the same cells.
+    A kept unit that fails footprint or refractory in a recording while firing at a real
+    rate is only matching noise there (typically a cell silenced by the condition): its
+    spikes in that recording are removed and it counts as 0 Hz, rather than being dropped
+    and inflating that recording's mean.
     """
     tables = [_curation_table(p.analyzer, params) for p in parts]
     keep = sorted(set().union(*(t.index[t["keep"]] for t in tables)))
@@ -535,11 +535,23 @@ def curate_together(parts: list[Data], params: Params, project: Project, force: 
         noise = (units["rejected_by"].str.contains("footprint|refractory")
                  & (units["firing_rate"].fillna(0) >= params.min_rate_hz))
         units["keep_joint"] = units.index.isin(keep)
-        units["in_recording"] = units["keep_joint"] & ~noise
+        units["zeroed_as_noise"] = units["keep_joint"] & noise
         units.to_csv(f"{base}_curation.csv", index_label="unit_id")
-        ids = units.index[units["in_recording"]].to_list()
-        logger.info("%s: units %s, left out as noise here %s", p.name, ids, sorted(set(keep) - set(ids)))
-        an = _cached_analyzer(Path(f"{base}_curated"), force, lambda: p.analyzer.select_units(ids))
+        zeroed = units.index[units["zeroed_as_noise"]].to_list()
+        logger.info("%s: units %s, spikes zeroed as noise for %s", p.name, keep, zeroed)
+
+        def cb():
+            if not zeroed:
+                return p.analyzer.select_units(keep)
+            s = p.analyzer.sorting
+            trains = {u: s.get_unit_spike_train(u)[:0] if u in zeroed else s.get_unit_spike_train(u)
+                      for u in keep}
+            an = _build_analyzer(si.NumpySorting.from_unit_dict(trains, s.get_sampling_frequency()),
+                                 p.recording, params, Path(f"{base}_zeroed"))
+            an.compute(params.extensions)
+            return an
+
+        an = _cached_analyzer(Path(f"{base}_curated"), force, cb)
         out.append(replace(p, analyzer=an, sorting=an.sorting))
     return out
 

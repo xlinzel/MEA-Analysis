@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from multiprocessing import freeze_support
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from meakit.core import (
     Params, Project, configure_runtime, _configure_logging,
@@ -67,9 +68,11 @@ def comparison(parts, slice_name, params, project, band="sem"):
     for d in parts:
         t, per_unit, _ = metrics.rate_over_time(d, window_s=window_s)
         dur = d.recording.get_total_duration()
+        cur = pd.read_csv(result_dir(project, d.name) / f"analyzer_{params.sorter}_curation.csv", index_col=0)
         recs.append(dict(label=d.tag or d.name, unit_chans=metrics.unit_channels(d), t=t,
                          per_unit=per_unit, rates={u: len(s) / dur for u, s in
-                                                   zip(d.sorting.unit_ids, metrics.unit_spike_times(d))}))
+                                                   zip(d.sorting.unit_ids, metrics.unit_spike_times(d))},
+                         zeroed=set(cur.index[cur["zeroed_as_noise"]])))
     fig = plots.comparison(recs, parts[0].locations, parts[0].recording.channel_ids,
                            window_s, band, slice_name)
     figdir = result_dir(project, slice_name) / "figures"
