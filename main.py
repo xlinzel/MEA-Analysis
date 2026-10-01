@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from multiprocessing import freeze_support
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from meakit.core import (
@@ -89,14 +90,18 @@ def comparison(parts, slice_name, params, project, band="sem"):
 
 
 def video(raw, part, params, project):
-    """Electrode timelapse of one recording; raw carries the pipeline's detect() peaks."""
-    ids = list(part.analyzer.channel_ids)
-    on = [ids.index(c) for cs in metrics.unit_channels(part).values() for c in cs]
+    """Electrode timelapse of one recording; part=None (no sorting) draws no unit rings."""
+    raw = detect(raw, params, project, save=True, force=False)
+    unit_locs = np.zeros((0, 2))
+    if part is not None:
+        ids = list(part.analyzer.channel_ids)
+        on = [ids.index(c) for cs in metrics.unit_channels(part).values() for c in cs]
+        unit_locs = part.analyzer.get_channel_locations()[on]
     rec = raw.recording
     figdir = result_dir(project, raw.name) / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
     stem = f"{raw.tag.replace(' ', '_') if raw.tag else raw.name}_electrodes.mp4"
-    plots.electrode_video(raw.peaks, raw.locations, part.analyzer.get_channel_locations()[on],
+    plots.electrode_video(raw.peaks, raw.locations, unit_locs,
                           rec.get_sampling_frequency(), rec.get_total_duration(),
                           figdir / stem, raw.tag or raw.name, params.detect_mad)
 
@@ -108,7 +113,14 @@ def run_slice(project, slice_name, names, params):
         data = load(project.dir / "data" / name / "data.raw.h5")
         datas.append(preprocess(data, params, project, save=True, force=False))
 
-    joint = concatenate(datas, slice_name)
+    try:
+        joint = concatenate(datas, slice_name)
+    except ValueError as e:   # recordings share no electrodes: nothing to sort together
+        print(f"Skipping {slice_name}: {e}")
+        if MAKE_VIDEOS:
+            for raw in datas:
+                video(raw, None, params, project)
+        return
     joint = sort(joint, params, project, force=False)
     joint = analyze(joint, params, project, force=False)
     joint = compute(joint, params, force=False)
@@ -119,7 +131,7 @@ def run_slice(project, slice_name, names, params):
 
     if MAKE_VIDEOS:
         for raw, part in zip(datas, parts):
-            video(detect(raw, params, project, save=True, force=False), part, params, project)
+            video(raw, part, params, project)
 
     # electrodes seen in each recording, so a map can show those gone silent
     seen = [{c for cs in metrics.unit_channels(d).values() for c in cs} for d in parts]
